@@ -3,7 +3,6 @@
 import asyncio
 import logging
 import re
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Request
@@ -24,23 +23,13 @@ router = APIRouter(prefix="/price", tags=["Price"])
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
-# Thread pool for running Amazon's sync scraper in async context
-_amazon_executor = ThreadPoolExecutor(max_workers=4)
-
-
 @router.post("/amazon", response_model=AmazonResponse)
 async def check_amazon_price(body: AmazonRequest, request: Request):
     """Scrape Amazon.in for product price by ASIN."""
     proxy_manager = request.app.state.proxy_manager
+    browser = request.app.state.playwright_browser
 
-    # Run sync scraper in thread pool to avoid blocking event loop
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(
-        _amazon_executor,
-        scrape_amazon,
-        body.asin,
-        proxy_manager,
-    )
+    result = await scrape_amazon(body.asin, browser, proxy_manager)
 
     return AmazonResponse(
         asin=result["asin"],
@@ -89,13 +78,7 @@ async def check_both_prices(body: BothRequest, request: Request):
     browser = request.app.state.playwright_browser
 
     # Run both scrapers in parallel
-    loop = asyncio.get_event_loop()
-    amazon_task = loop.run_in_executor(
-        _amazon_executor,
-        scrape_amazon,
-        body.asin,
-        proxy_manager,
-    )
+    amazon_task = scrape_amazon(body.asin, browser, proxy_manager)
     flipkart_task = scrape_flipkart(body.fsn, browser, proxy_manager)
 
     amazon_result, flipkart_result = await asyncio.gather(amazon_task, flipkart_task)

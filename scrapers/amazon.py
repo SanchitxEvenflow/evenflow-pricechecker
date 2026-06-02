@@ -1,18 +1,20 @@
-"""Amazon.in price scraper using requests + BeautifulSoup4."""
+"""Amazon.in price scraper using Playwright + BeautifulSoup4."""
 
+import asyncio
 import logging
 import os
 import random
 import re
-import time
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
+from urllib.parse import urlparse
 
-from curl_cffi import requests as curl_requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+from playwright.async_api import Browser
 
 from proxy.manager import ProxyManager
-from utils.headers import get_headers
+from utils.headers import UA_POOL
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -21,6 +23,16 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 DELAY_MIN = float(os.getenv("AMAZON_DELAY_MIN", "3.0"))
 DELAY_MAX = float(os.getenv("AMAZON_DELAY_MAX", "7.0"))
+
+DEBUG_MODE = os.getenv("AMAZON_DEBUG", "false").lower() == "true"
+DEBUG_DIR = Path("debug_amazon")
+
+STEALTH_SCRIPT = """
+Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+Object.defineProperty(navigator, 'languages', { get: () => ['en-IN', 'en-US', 'en'] });
+window.chrome = { runtime: {} };
+"""
 
 PRICE_SELECTORS = [
     "#corePrice_feature_div span.a-offscreen",
@@ -157,10 +169,10 @@ def _extract_best_seller_rank(soup: BeautifulSoup) -> dict:
     }
 
 
-def _detect_status(soup: BeautifulSoup, response_text: str, asin: str) -> str:
+def _detect_status(soup: BeautifulSoup, response_text: str, asin: str, page_url: str = "") -> str:
     lower_text = response_text.lower()
-    if "captcha" in lower_text or "robot check" in lower_text:
-        logger.warning("BLOCKED: CAPTCHA/robot-check for %s (response_len=%d)", asin, len(response_text))
+    if "captcha" in lower_text or "robot check" in lower_text or "continue shopping" in lower_text:
+        logger.warning("BLOCKED: bot-challenge page for %s (response_len=%d)", asin, len(response_text))
         return "blocked"
 
     availability_el = soup.select_one("#availability")
@@ -178,17 +190,80 @@ def _detect_status(soup: BeautifulSoup, response_text: str, asin: str) -> str:
 
     title_el = soup.select_one("#productTitle")
     if not title_el:
+        logger.warning("not_found for %s — landed_url=%s body_start=%r", asin, page_url, response_text[:300])
         return "not_found"
 
     return "check_price"
 
 
-def scrape_amazon(asin: str, proxy_manager: ProxyManager) -> dict:
-    """
-    Scrape Amazon.in product page for price data.
+def _parse_proxy(proxy_url: str) -> dict:
+    """Parse proxy URL into Playwright's proxy format dict."""
+    parsed = urlparse(proxy_url)
+    result: dict = {"server": f"{parsed.scheme}://{parsed.hostname}:{parsed.port}"}
+    if parsed.username:
+        result["username"] = parsed.username
+    if parsed.password:
+        result["password"] = parsed.password
+    return result
 
+
+async def _safe_close_context(context) -> None:
+    """Safely close a Playwright browser context — never leak."""
+    if context:
+        try:
+            await context.close()
+        except Exception:
+            pass
+
+
+async def _handle_interstitial(page) -> bool:
+    """Click through Amazon's 'Continue shopping' bot-check interstitial if present."""
+    try:
+        body = await page.inner_text("body")
+        if "continue shopping" not in body.lower():
+            return False
+
+        logger.info("Interstitial detected — attempting to click through")
+        for selector in ["input[type='submit']", "button", "a:has-text('Continue shopping')"]:
+            try:
+                await page.click(selector, timeout=3000)
+                break
+            except Exception:
+                continue
+
+        await page.wait_for_load_state("networkidle", timeout=15000)
+        try:
+            await page.wait_for_selector("#productTitle", timeout=8000)
+        except Exception:
+            pass
+
+        logger.info("Post-interstitial page: %s", page.url)
+        return True
+
+    except Exception as e:
+        logger.warning("Interstitial handler error: %s", e)
+        return False
+
+
+async def _save_debug(page, asin: str, attempt: int) -> None:
+    """Save screenshot and HTML dump for debugging (when AMAZON_DEBUG=true)."""
+    try:
+        DEBUG_DIR.mkdir(exist_ok=True)
+        ts = datetime.now(IST).strftime("%H%M%S")
+        await page.screenshot(path=str(DEBUG_DIR / f"{asin}_{ts}_attempt{attempt + 1}.png"), full_page=True)
+        html = await page.content()
+        (DEBUG_DIR / f"{asin}_{ts}_attempt{attempt + 1}.html").write_text(html, encoding="utf-8")
+        logger.info("Debug files saved to %s/", DEBUG_DIR)
+    except Exception as e:
+        logger.warning("Debug save failed: %s", e)
+
+
+async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager) -> dict:
+    """
+    Scrape Amazon.in product page for price data using a real Playwright browser context.
+
+    Tries up to min(5, pool_size) proxies then falls back to a direct connection.
     Always returns a dict — never raises exceptions to the caller.
-    Tries up to min(5, pool_size) proxies before falling back to a direct connection.
     """
     url = f"https://www.amazon.in/dp/{asin}"
 
@@ -200,40 +275,67 @@ def scrape_amazon(asin: str, proxy_manager: ProxyManager) -> dict:
     }
 
     max_proxy_attempts = min(5, len(proxy_manager.active_pool) or 1)
+    context = None
 
     for attempt in range(max_proxy_attempts + 1):  # +1 = direct-connection fallback
         try:
             delay = random.uniform(DELAY_MIN, DELAY_MAX)
             logger.info("Amazon scrape attempt %d/%d for ASIN %s — waiting %.1fs",
                         attempt + 1, max_proxy_attempts + 1, asin, delay)
-            time.sleep(delay)
+            await asyncio.sleep(delay)
 
             if attempt == max_proxy_attempts:
                 proxy = None
-                proxies = None
                 logger.info("All proxies exhausted — trying direct connection for ASIN %s", asin)
             else:
                 proxy = proxy_manager.get_proxy()
-                proxies = {"http": proxy, "https": proxy} if proxy else None
 
-            session = curl_requests.Session(impersonate="chrome124")
-            session.headers.update(get_headers())
-            if proxies:
-                session.proxies.update(proxies)
+            user_agent = random.choice(UA_POOL)
+            context_opts: dict = {
+                "viewport": {"width": 1920, "height": 1080},
+                "user_agent": user_agent,
+                "locale": "en-IN",
+                "timezone_id": "Asia/Kolkata",
+            }
+            if proxy:
+                context_opts["proxy"] = _parse_proxy(proxy)
 
-            response = session.get(url, timeout=15)
-            response.raise_for_status()
-            logger.info("HTTP %d for %s via proxy=%s (len=%d)", response.status_code, url, proxy, len(response.text))
+            context = await browser.new_context(**context_opts)
+            await context.add_init_script(STEALTH_SCRIPT)
+            page = await context.new_page()
 
-            soup = BeautifulSoup(response.text, "html.parser")
+            logger.info("Navigating to %s via proxy=%s", url, proxy)
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            try:
+                await page.wait_for_load_state("networkidle", timeout=15000)
+            except Exception:
+                pass
 
-            status = _detect_status(soup, response.text, asin)
+            logger.info("Page landed at: %s", page.url)
+            await _handle_interstitial(page)
+
+            # Wait for product title to appear — handles deferred JS rendering
+            try:
+                await page.wait_for_selector("#productTitle", timeout=8000)
+            except Exception:
+                pass  # _detect_status will return not_found if still missing
+
+            html = await page.content()
+            body_text = await page.inner_text("body")
+            soup = BeautifulSoup(html, "html.parser")
+
+            if DEBUG_MODE:
+                await _save_debug(page, asin, attempt)
+
+            status = _detect_status(soup, body_text, asin, page_url=page.url)
 
             if status == "blocked":
                 proxy_manager.report_failure(proxy)
                 if attempt < max_proxy_attempts:
                     logger.warning("Blocked on attempt %d for ASIN %s — retrying with new proxy", attempt + 1, asin)
-                    time.sleep(5)
+                    await _safe_close_context(context)
+                    context = None
+                    await asyncio.sleep(5)
                     continue
                 return {**_empty, "status": "blocked", "checked_at": datetime.now(IST).isoformat()}
 
@@ -253,6 +355,8 @@ def scrape_amazon(asin: str, proxy_manager: ProxyManager) -> dict:
             final_status = "available" if (price and buy_button) else "price_found"
 
             proxy_manager.report_success(proxy)
+
+            logger.info("Amazon scraped ASIN %s: price=%s, rating=%s, status=%s", asin, price, rating, final_status)
 
             return {
                 "asin": asin,
@@ -274,25 +378,14 @@ def scrape_amazon(asin: str, proxy_manager: ProxyManager) -> dict:
 
         except Exception as e:
             logger.exception("Amazon scrape error for ASIN %s (attempt %d): %s", asin, attempt + 1, str(e))
+            await _safe_close_context(context)
+            context = None
             if attempt < max_proxy_attempts:
                 continue
             return {**_empty, "status": "error", "message": str(e), "checked_at": datetime.now(IST).isoformat()}
 
-    return {
-        "asin": asin,
-        "price": "",
-        "mrp": None,
-        "rating": None,
-        "rating_count": None,
-        "rank_raw": None,
-        "rank_value": None,
-        "rank_category": None,
-        "parent_node": None,
-        "child_node": None,
-        "category_path": None,
-        "status": "error",
-        "message": "Max retries exceeded",
-        "platform": "amazon",
-        "url": url,
-        "checked_at": datetime.now(IST).isoformat(),
-    }
+        finally:
+            await _safe_close_context(context)
+            context = None
+
+    return {**_empty, "status": "error", "message": "Max retries exceeded", "checked_at": datetime.now(IST).isoformat()}
