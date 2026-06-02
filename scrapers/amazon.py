@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
+from curl_cffi import requests as curl_requests
 from dotenv import load_dotenv
 from playwright.async_api import Browser
 
@@ -105,67 +106,86 @@ def _extract_rating_count(soup: BeautifulSoup) -> str | None:
     return None
 
 
+
+def _extract_best_seller_rank(soup: BeautifulSoup) -> dict:
+    empty = {
+        "rank_raw": None,
+        "rank_value": None,
+        "rank_category": None,
+        "sub_rank_value": None,
+        "sub_rank_category": None,
+    }
+
+    # 1) Try specific detail blocks
+    selectors = [
+        "#detailBullets_feature_div",
+        "#detailBulletsWrapper_feature_div",
+        "#prodDetails",
+        "#productDetails_detailBullets_sections1",
+        "#productDetails_techSpec_section_1",
+        "#productDetails_db_sections",
+    ]
+
+    text = None
+    for selector in selectors:
+        block = soup.select_one(selector)
+        if not block:
+            continue
+        block_text = block.get_text(" ", strip=True)
+        if "Best Sellers Rank" in block_text:
+            text = block_text
+            break
+
+    # 2) Full-page fallback
+    if not text:
+        full_text = soup.get_text(" ", strip=True)
+        m = re.search(r"Best Sellers Rank(.{0,1200})", full_text, re.I)
+        if m:
+            text = "Best Sellers Rank " + m.group(1)
+
+    if not text:
+        return empty
+
+    matches = re.findall(
+        r"#([\d,]+)\s+in\s+(.+?)(?=\s*\(|\s+#|$)",
+        text,
+    )
+    matches = [(n.replace(",", ""), c.strip()) for n, c in matches if c.strip()]
+
+    result = empty.copy()
+    result["rank_raw"] = text
+
+    if matches:
+        result["rank_value"] = matches[0][0]
+        result["rank_category"] = matches[0][1]
+    if len(matches) > 1:
+        result["sub_rank_value"] = matches[1][0]
+        result["sub_rank_category"] = matches[1][1]
+
+    return result
+
+
 def _extract_breadcrumbs(soup: BeautifulSoup) -> list[str]:
     for selector in BREADCRUMB_SELECTORS:
-        els = soup.select(selector)
-        crumbs = [el.get_text(" ", strip=True) for el in els if el.get_text(" ", strip=True)]
-        crumbs = [c for c in crumbs if c and c != ">"]
-        if crumbs:
-            return crumbs
+        elements = soup.select(selector)
+        if elements:
+            crumbs = [el.get_text(" ", strip=True) for el in elements]
+            if crumbs:
+                return crumbs
     return []
-
 
 def _extract_category_hierarchy(soup: BeautifulSoup) -> dict:
     crumbs = _extract_breadcrumbs(soup)
+    # Remove separators and generic root items
+    crumbs = [c for c in crumbs if c and c.lower() not in {"home", "amazon.in", "›", ">"}]
+
     parent_node = crumbs[0] if len(crumbs) >= 1 else None
-    child_node = crumbs[1] if len(crumbs) >= 2 else None
+    child_node = crumbs[-1] if len(crumbs) >= 2 else None
+
     return {
         "parent_node": parent_node,
         "child_node": child_node,
         "category_path": " > ".join(crumbs) if crumbs else None,
-    }
-
-
-def _extract_best_seller_rank(soup: BeautifulSoup) -> dict:
-    full_text = soup.get_text("\n", strip=True)
-
-    rank_raw = None
-    rank_value = None
-    rank_category = None
-
-    m = re.search(
-        r"(Amazon Best Sellers Rank|Best Sellers Rank)\s*:?\s*(.*?)(?:\n|$)",
-        full_text,
-        re.IGNORECASE,
-    )
-    if m:
-        rank_raw = m.group(2).strip()
-
-    if not rank_raw:
-        for selector in DETAILS_SELECTORS:
-            el = soup.select_one(selector)
-            if not el:
-                continue
-            details_text = el.get_text("\n", strip=True)
-            m2 = re.search(
-                r"(Amazon Best Sellers Rank|Best Sellers Rank)\s*:?\s*(.*?)(?:\n|$)",
-                details_text,
-                re.IGNORECASE,
-            )
-            if m2:
-                rank_raw = m2.group(2).strip()
-                break
-
-    if rank_raw:
-        m3 = re.search(r"#([\d,]+)\s+in\s+(.+?)(?:\(|$)", rank_raw)
-        if m3:
-            rank_value = m3.group(1).replace(",", "")
-            rank_category = m3.group(2).strip()
-
-    return {
-        "rank_raw": rank_raw,
-        "rank_value": rank_value,
-        "rank_category": rank_category,
     }
 
 
@@ -258,6 +278,41 @@ async def _save_debug(page, asin: str, attempt: int) -> None:
         logger.warning("Debug save failed: %s", e)
 
 
+def _fetch_bsr_curl_sync(asin: str, proxy_url: str | None) -> dict:
+    _empty = {
+        "rank_raw": None, "rank_value": None, "rank_category": None,
+        "sub_rank_value": None, "sub_rank_category": None,
+    }
+    url = f"https://www.amazon.in/dp/{asin}"
+    try:
+        proxies = {"https": proxy_url, "http": proxy_url} if proxy_url else None
+        resp = curl_requests.get(
+            url,
+            impersonate="chrome120",
+            proxies=proxies,
+            timeout=20,
+            headers={
+                "Accept-Language": "en-IN,en;q=0.9",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            },
+        )
+        if resp.status_code != 200:
+            logger.warning("BSR curl fallback: HTTP %d for ASIN %s", resp.status_code, asin)
+            return _empty
+        soup = BeautifulSoup(resp.text, "html.parser")
+        result = _extract_best_seller_rank(soup)
+        logger.info("BSR curl fallback for %s: rank_value=%s rank_category=%s",
+                    asin, result["rank_value"], result["rank_category"])
+        return result
+    except Exception as e:
+        logger.warning("BSR curl fallback error for ASIN %s: %s", asin, e)
+        return _empty
+
+
+async def _fetch_bsr_curl(asin: str, proxy_url: str | None) -> dict:
+    return await asyncio.to_thread(_fetch_bsr_curl_sync, asin, proxy_url)
+
+
 async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager) -> dict:
     """
     Scrape Amazon.in product page for price data using a real Playwright browser context.
@@ -270,6 +325,7 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
     _empty = {
         "asin": asin, "price": "", "mrp": None, "rating": None, "rating_count": None,
         "rank_raw": None, "rank_value": None, "rank_category": None,
+        "sub_rank_value": None, "sub_rank_category": None,
         "parent_node": None, "child_node": None, "category_path": None,
         "platform": "amazon", "url": url,
     }
@@ -349,6 +405,12 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
             rating_count = _extract_rating_count(soup)
 
             rank_info = _extract_best_seller_rank(soup)
+            logger.info("BSR raw from Playwright: %r", rank_info["rank_raw"])
+
+            if not rank_info["rank_value"]:
+                logger.info("Playwright BSR empty — trying curl fallback for ASIN %s", asin)
+                rank_info = await _fetch_bsr_curl(asin, proxy)
+
             category_info = _extract_category_hierarchy(soup)
 
             buy_button = soup.select_one("#add-to-cart-button") or soup.select_one("#buy-now-button")
@@ -367,6 +429,8 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
                 "rank_raw": rank_info["rank_raw"],
                 "rank_value": rank_info["rank_value"],
                 "rank_category": rank_info["rank_category"],
+                "sub_rank_value": rank_info["sub_rank_value"],
+                "sub_rank_category": rank_info["sub_rank_category"],
                 "parent_node": category_info["parent_node"],
                 "child_node": category_info["child_node"],
                 "category_path": category_info["category_path"],

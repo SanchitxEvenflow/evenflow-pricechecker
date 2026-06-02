@@ -66,6 +66,8 @@ class AmazonResponse(BaseModel):
     rank_raw: str | None = None
     rank_value: str | None = None
     rank_category: str | None = None
+    sub_rank_value: str | None = None
+    sub_rank_category: str | None = None
     parent_node: str | None = None
     child_node: str | None = None
     category_path: str | None = None

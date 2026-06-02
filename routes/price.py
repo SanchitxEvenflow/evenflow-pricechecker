@@ -40,6 +40,8 @@ async def check_amazon_price(body: AmazonRequest, request: Request):
         rank_raw=result.get("rank_raw"),
         rank_value=result.get("rank_value"),
         rank_category=result.get("rank_category"),
+        sub_rank_value=result.get("sub_rank_value"),
+        sub_rank_category=result.get("sub_rank_category"),
         parent_node=result.get("parent_node"),
         child_node=result.get("child_node"),
         category_path=result.get("category_path"),
