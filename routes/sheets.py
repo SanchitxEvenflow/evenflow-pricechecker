@@ -11,15 +11,12 @@ from pydantic import BaseModel
 
 from scrapers.amazon import scrape_amazon
 from utils.google_sheets import GoogleSheetsClient
+from utils.scrape_helpers import CHUNK_SIZE, SCRAPE_CONCURRENCY, format_update
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/sheets", tags=["Sheets"])
 
 IST = timezone(timedelta(hours=5, minutes=30))
-
-# 3 concurrent sessions per proxy — raise to 40 if proxies hold up, lower if blocks increase
-SCRAPE_CONCURRENCY = 30
-CHUNK_SIZE = 50
 
 
 def get_sheets_client():
@@ -49,19 +46,7 @@ class ConfigResponse(BaseModel):
     worksheet_name: str
 
 
-def _format_update(res: dict) -> dict:
-    return {
-        "row": res["row"],
-        "values": [
-            res.get("price", ""),
-            res.get("rating", ""),
-            res.get("rating_count", ""),
-            res.get("parent_node", ""),
-            res.get("child_node", ""),
-            res.get("status", "unknown"),
-            res.get("checked_at", ""),
-        ],
-    }
+_format_update = format_update
 
 
 async def _scrape_with_sem(sem: asyncio.Semaphore, asin: str, row: int, browser, proxy_manager) -> dict:
@@ -101,6 +86,31 @@ async def preview_sheet(body: PreviewRequest, sheets_client: GoogleSheetsClient 
     except Exception as e:
         logger.exception("Failed to preview sheet")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/cron-trigger")
+async def cron_trigger(request: Request):
+    """Manually fire the scheduled scrape job immediately (runs in background)."""
+    if request.app.state.cron_status.get("is_running"):
+        raise HTTPException(status_code=409, detail="A cron run is already in progress")
+    from scheduler import run_scheduled_scrape  # lazy import — avoids circular dependency
+    asyncio.create_task(run_scheduled_scrape(request.app))
+    return {"status": "started"}
+
+
+@router.get("/cron-status")
+async def cron_status(request: Request):
+    """Return current cron scheduler status and next run time."""
+    status = dict(getattr(request.app.state, "cron_status", {}))
+    scheduler = getattr(request.app.state, "cron_scheduler", None)
+    if scheduler:
+        job = scheduler.get_job("scheduled_scrape")
+        status["next_run_at"] = job.next_run_time.isoformat() if (job and job.next_run_time) else None
+        status["scheduler_enabled"] = True
+    else:
+        status["next_run_at"] = None
+        status["scheduler_enabled"] = False
+    return status
 
 
 @router.post("/scrape-batch")

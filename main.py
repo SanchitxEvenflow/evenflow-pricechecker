@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from proxy.manager import ProxyManager
 from routes.price import router as price_router
 from routes.sheets import router as sheets_router
+from scheduler import setup_scheduler
 from schemas.price import HealthResponse
 
 load_dotenv()
@@ -78,12 +79,29 @@ async def lifespan(app: FastAPI):
         app.state.playwright_browser = None
         app.state.playwright_ready = False
 
+    app.state.cron_status = {
+        "is_running": False,
+        "last_run_at": None,
+        "last_run_tab": None,
+        "last_run_duration_seconds": None,
+        "last_run_processed": None,
+        "total": None,
+        "progress": None,
+        "error": None,
+    }
+    app.state.cron_scheduler = setup_scheduler(app)
+    if app.state.cron_scheduler:
+        logger.info("Cron scheduler active — interval=%s min", os.getenv("CRON_INTERVAL_MINUTES", "60"))
+
     logger.info("Price Checker service ready!")
 
     yield
 
     # ── Shutdown ──
     logger.info("Shutting down Price Checker service...")
+    if getattr(app.state, "cron_scheduler", None):
+        app.state.cron_scheduler.shutdown(wait=False)
+        logger.info("Cron scheduler stopped")
     if browser:
         try:
             await browser.close()

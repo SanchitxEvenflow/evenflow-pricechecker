@@ -85,6 +85,28 @@ class GoogleSheetsClient:
         meta = self.service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
         return [s["properties"]["title"] for s in meta.get("sheets", [])]
 
+    def create_tab(self, spreadsheet_id: str, tab_name: str) -> None:
+        """Create a new sheet tab in the spreadsheet."""
+        if not self.service:
+            raise ValueError("Google Sheets service not initialized (missing credentials).")
+        body = {"requests": [{"addSheet": {"properties": {"title": tab_name}}}]}
+        self.service.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body=body).execute()
+
+    def write_header_and_asins(self, spreadsheet_id: str, tab_name: str, asins: list[str]) -> None:
+        """Write header row + ASIN list to column A of a newly created tab."""
+        if not self.service:
+            raise ValueError("Google Sheets service not initialized (missing credentials).")
+        rows: list[list[str]] = [
+            ["ASIN", "Price", "Rating", "Rating Count", "Parent Node", "Child Node", "Status", "Checked At"]
+        ]
+        rows.extend([[a] for a in asins])
+        self.service.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id,
+            range=f"'{tab_name}'!A1",
+            valueInputOption="USER_ENTERED",
+            body={"values": rows},
+        ).execute()
+
     def batch_update_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict[str, Any]]):
         """
         Updates multiple rows in the spreadsheet.

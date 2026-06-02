@@ -14,6 +14,38 @@ interface RowData {
   rating_count?: string;
 }
 
+interface CronStatus {
+  is_running: boolean;
+  last_run_at: string | null;
+  last_run_tab: string | null;
+  last_run_duration_seconds: number | null;
+  last_run_processed: number | null;
+  total: number | null;
+  progress: number | null;
+  next_run_at: string | null;
+  scheduler_enabled?: boolean;
+  error?: string | null;
+}
+
+function fmtTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString("en-IN", {
+    hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: "Asia/Kolkata",
+  }) + " IST";
+}
+
+function fmtDuration(secs: number): string {
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return m > 0 ? `${m}m ${s}s` : `${s}s`;
+}
+
+function fmtUntil(iso: string): string {
+  const diff = Math.floor((new Date(iso).getTime() - Date.now()) / 1000);
+  if (diff <= 0) return "now";
+  const m = Math.floor(diff / 60);
+  return m > 0 ? `in ${m}m` : `in ${diff}s`;
+}
+
 export default function Dashboard() {
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [sheetId, setSheetId] = useState("");
@@ -30,6 +62,21 @@ export default function Dashboard() {
     error: 0,
   });
 
+  const [cronStatus, setCronStatus] = useState<CronStatus | null>(null);
+  const [isTriggeringCron, setIsTriggeringCron] = useState(false);
+
+  useEffect(() => {
+    const fetchCronStatus = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/sheets/cron-status`);
+        if (res.ok) setCronStatus(await res.json());
+      } catch {}
+    };
+    fetchCronStatus();
+    const interval = setInterval(fetchCronStatus, cronStatus?.is_running ? 10000 : 60000);
+    return () => clearInterval(interval);
+  }, [cronStatus?.is_running]);
+
   useEffect(() => {
     // Fetch default config from backend
     fetch(`${API_BASE}/sheets/config`)
@@ -40,6 +87,21 @@ export default function Dashboard() {
       })
       .catch(err => console.error("Failed to load config", err));
   }, []);
+
+  const handleCronTrigger = async () => {
+    setIsTriggeringCron(true);
+    try {
+      const res = await fetch(`${API_BASE}/sheets/cron-trigger`, { method: "POST" });
+      if (!res.ok) {
+        const data = await res.json();
+        setErrorMsg(data.detail || "Failed to trigger cron job");
+      }
+    } catch (e: any) {
+      setErrorMsg("Error triggering cron: " + e.message);
+    } finally {
+      setIsTriggeringCron(false);
+    }
+  };
 
   const handleConnect = async () => {
     setIsConnecting(true);
@@ -270,6 +332,102 @@ export default function Dashboard() {
             </div>
           </div>
         )}
+
+        {/* Cron Status Card */}
+        <div className={`${cardBgClass} border ${borderClass} rounded-2xl p-6 shadow-sm`}>
+          <div className="flex items-center justify-between mb-4">
+            <p className={`text-xs font-semibold uppercase tracking-wider ${mutedTextClass}`}>Cron Scheduler</p>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleCronTrigger}
+                disabled={isTriggeringCron || cronStatus?.is_running === true}
+                className={`px-3 py-1 rounded-lg text-xs font-medium transition-all
+                  ${isDarkMode ? "bg-neutral-800 hover:bg-neutral-700 text-white" : "bg-neutral-200 hover:bg-neutral-300 text-neutral-900"}
+                  disabled:opacity-50 disabled:cursor-not-allowed`}
+              >
+                {isTriggeringCron ? "Starting..." : "Run Now"}
+              </button>
+            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold
+              ${cronStatus?.scheduler_enabled === false
+                ? "bg-neutral-500/10 text-neutral-500"
+                : cronStatus?.is_running
+                  ? "bg-blue-500/10 text-blue-500"
+                  : "bg-green-500/10 text-green-500"}`}>
+              <span className={`w-1.5 h-1.5 rounded-full
+                ${cronStatus?.scheduler_enabled === false
+                  ? "bg-neutral-500"
+                  : cronStatus?.is_running
+                    ? "bg-blue-500 animate-pulse"
+                    : "bg-green-500"}`} />
+              {cronStatus?.scheduler_enabled === false ? "Disabled" : cronStatus?.is_running ? "Running" : "Idle"}
+            </span>
+            </div>
+          </div>
+
+          {cronStatus === null ? (
+            <p className={`text-sm ${mutedTextClass}`}>Loading...</p>
+          ) : cronStatus.scheduler_enabled === false ? (
+            <p className={`text-sm ${mutedTextClass}`}>Scheduler disabled — set <code className="text-xs px-1 py-0.5 rounded bg-neutral-500/10">CRON_ENABLED=true</code> to activate.</p>
+          ) : (
+            <div className="space-y-2.5">
+              {cronStatus.last_run_at ? (
+                <>
+                  <div className="flex justify-between text-sm">
+                    <span className={mutedTextClass}>Last run</span>
+                    <span className="font-mono text-xs">{cronStatus.last_run_tab || "—"}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className={mutedTextClass}>Started</span>
+                    <span>{fmtTime(cronStatus.last_run_at)}</span>
+                  </div>
+                  {cronStatus.last_run_duration_seconds !== null && (
+                    <div className="flex justify-between text-sm">
+                      <span className={mutedTextClass}>Duration</span>
+                      <span>{fmtDuration(cronStatus.last_run_duration_seconds)}</span>
+                    </div>
+                  )}
+                  {cronStatus.last_run_processed !== null && cronStatus.total !== null && (
+                    <div className="flex justify-between text-sm">
+                      <span className={mutedTextClass}>Processed</span>
+                      <span>{cronStatus.last_run_processed} / {cronStatus.total} ASINs</span>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <p className={`text-sm ${mutedTextClass}`}>No runs yet</p>
+              )}
+
+              {cronStatus.next_run_at && (
+                <div className="flex justify-between text-sm">
+                  <span className={mutedTextClass}>Next run</span>
+                  <span>
+                    {fmtTime(cronStatus.next_run_at)}
+                    <span className={`ml-2 ${mutedTextClass}`}>({fmtUntil(cronStatus.next_run_at)})</span>
+                  </span>
+                </div>
+              )}
+
+              {cronStatus.error && (
+                <p className="text-xs text-red-500 mt-1">{cronStatus.error}</p>
+              )}
+
+              {cronStatus.is_running && cronStatus.progress !== null && cronStatus.total !== null && cronStatus.total > 0 && (
+                <div className="pt-1">
+                  <div className="flex justify-between text-xs mb-1.5">
+                    <span className={mutedTextClass}>Progress</span>
+                    <span className="text-blue-500 font-medium">{cronStatus.progress} / {cronStatus.total}</span>
+                  </div>
+                  <div className={`h-2 rounded-full overflow-hidden ${isDarkMode ? "bg-neutral-800" : "bg-neutral-200"}`}>
+                    <div
+                      className="h-full bg-blue-500 rounded-full transition-all duration-500"
+                      style={{ width: `${Math.round((cronStatus.progress / cronStatus.total) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
 
         {/* Table */}
         {rows.length > 0 && (
