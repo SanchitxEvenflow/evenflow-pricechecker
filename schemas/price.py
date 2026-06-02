@@ -1,0 +1,105 @@
+"""Pydantic v2 request/response models for price checking endpoints."""
+
+import re
+from datetime import datetime
+from pydantic import BaseModel, field_validator
+
+
+# ── Request Models ──────────────────────────────────────────────────────────
+
+class AmazonRequest(BaseModel):
+    asin: str
+    force_refresh: bool = False
+
+    @field_validator("asin")
+    @classmethod
+    def validate_asin(cls, v: str) -> str:
+        v = v.strip().upper()
+        if not re.match(r"^[A-Z0-9]{10}$", v):
+            raise ValueError("ASIN must be exactly 10 alphanumeric characters")
+        return v
+
+
+class FlipkartRequest(BaseModel):
+    fsn: str
+    force_refresh: bool = False
+
+    @field_validator("fsn")
+    @classmethod
+    def validate_fsn(cls, v: str) -> str:
+        v = v.strip().upper()
+        if not re.match(r"^[A-Z0-9]{16}$", v):
+            raise ValueError("FSN must be exactly 16 alphanumeric characters")
+        return v
+
+
+class BothRequest(BaseModel):
+    asin: str
+    fsn: str
+    force_refresh: bool = False
+
+    @field_validator("asin")
+    @classmethod
+    def validate_asin(cls, v: str) -> str:
+        v = v.strip().upper()
+        if not re.match(r"^[A-Z0-9]{10}$", v):
+            raise ValueError("ASIN must be exactly 10 alphanumeric characters")
+        return v
+
+    @field_validator("fsn")
+    @classmethod
+    def validate_fsn(cls, v: str) -> str:
+        v = v.strip().upper()
+        if not re.match(r"^[A-Z0-9]{16}$", v):
+            raise ValueError("FSN must be exactly 16 alphanumeric characters")
+        return v
+
+
+# ── Response Models ─────────────────────────────────────────────────────────
+
+class AmazonResponse(BaseModel):
+    asin: str
+    price: str
+    mrp: str | None = None
+    rating: str | None = None
+    rating_count: str | None = None
+    rank_raw: str | None = None
+    rank_value: str | None = None
+    rank_category: str | None = None
+    parent_node: str | None = None
+    child_node: str | None = None
+    category_path: str | None = None
+    status: str
+    platform: str = "amazon"
+    url: str
+    checked_at: datetime
+
+
+class FlipkartResponse(BaseModel):
+    fsn: str
+    price: str
+    mrp: str | None = None
+    discount: str | None = None
+    rating: str | None = None
+    rating_count: str | None = None
+    status: str
+    platform: str = "flipkart"
+    url: str
+    resolved_url: str | None = None
+    checked_at: datetime
+
+
+class BothResponse(BaseModel):
+    asin: str
+    fsn: str
+    amazon: AmazonResponse
+    flipkart: FlipkartResponse
+    price_diff: str | None = None
+    cheaper_on: str | None = None
+
+
+class HealthResponse(BaseModel):
+    status: str
+    proxy_pool_size: int
+    playwright_ready: bool
+    timestamp: datetime
