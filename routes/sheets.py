@@ -1,10 +1,12 @@
 import asyncio
+import json
 import logging
 import os
 from typing import Any, List, Optional
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Request, HTTPException, Depends
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from scrapers.amazon import scrape_amazon
@@ -15,8 +17,14 @@ router = APIRouter(prefix="/sheets", tags=["Sheets"])
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
+# 3 concurrent sessions per proxy — raise to 40 if proxies hold up, lower if blocks increase
+SCRAPE_CONCURRENCY = 30
+CHUNK_SIZE = 50
+
+
 def get_sheets_client():
     return GoogleSheetsClient()
+
 
 class PreviewRequest(BaseModel):
     sheet_id: str
@@ -39,6 +47,29 @@ class PreviewResponse(BaseModel):
 class ConfigResponse(BaseModel):
     spreadsheet_id: str
     worksheet_name: str
+
+
+def _format_update(res: dict) -> dict:
+    return {
+        "row": res["row"],
+        "values": [
+            res.get("price", ""),
+            res.get("rating", ""),
+            res.get("rating_count", ""),
+            res.get("parent_node", ""),
+            res.get("child_node", ""),
+            res.get("status", "unknown"),
+            res.get("checked_at", ""),
+        ],
+    }
+
+
+async def _scrape_with_sem(sem: asyncio.Semaphore, asin: str, row: int, browser, proxy_manager) -> dict:
+    async with sem:
+        result = await scrape_amazon(asin, browser, proxy_manager)
+        result["row"] = row
+        return result
+
 
 @router.get("/config", response_model=ConfigResponse)
 async def get_config():
@@ -73,65 +104,84 @@ async def preview_sheet(body: PreviewRequest, sheets_client: GoogleSheetsClient 
 
 
 @router.post("/scrape-batch")
-async def scrape_batch(body: ScrapeBatchRequest, request: Request, sheets_client: GoogleSheetsClient = Depends(get_sheets_client)):
-    proxy_manager = request.app.state.proxy_manager
+async def scrape_batch(
+    body: ScrapeBatchRequest,
+    request: Request,
+    sheets_client: GoogleSheetsClient = Depends(get_sheets_client),
+):
+    """Scrape all ASINs with concurrency control, writing to sheets every 50 results."""
     browser = request.app.state.playwright_browser
+    proxy_manager = request.app.state.proxy_manager
 
     if not body.rows:
         return {"status": "success", "message": "No rows to process", "data": []}
 
-    results = []
-    
-    # Scrape all ASINs concurrently
-    tasks = []
-    for row_data in body.rows:
-        tasks.append(scrape_amazon(row_data.asin, browser, proxy_manager))
-        
-    scraped_data = await asyncio.gather(*tasks)
-    
-    # Prepare update payload
-    updates = []
-    response_data = []
-    
-    for i, row_data in enumerate(body.rows):
-        res = scraped_data[i]
-        
-        # Format the values for columns B through H
-        # Column B: Price
-        # Column C: Rating
-        # Column D: Rating Count
-        # Column E: Parent Node
-        # Column F: Child Node
-        # Column G: Status
-        # Column H: Checked At
-        
-        vals = [
-            res.get("price", ""),
-            res.get("rating", ""),
-            res.get("rating_count", ""),
-            res.get("parent_node", ""),
-            res.get("child_node", ""),
-            res.get("status", "unknown"),
-            res.get("checked_at", "")
-        ]
-        
-        updates.append({
-            "row": row_data.row,
-            "values": vals
-        })
-        
-        res["row"] = row_data.row
-        response_data.append(res)
-        
-    # Write to Google Sheets
-    try:
-        sheets_client.batch_update_rows(body.sheet_id, body.tab_name, updates)
-    except Exception as e:
-        logger.exception("Failed to write batch to Google Sheets")
-        raise HTTPException(status_code=500, detail=f"Failed to write to sheets: {str(e)}")
-        
-    return {
-        "status": "success",
-        "processed": len(response_data),
-        "data": response_data
-    }
+    sem = asyncio.Semaphore(SCRAPE_CONCURRENCY)
+    all_results: list[dict] = []
+
+    for chunk_start in range(0, len(body.rows), CHUNK_SIZE):
+        chunk = body.rows[chunk_start : chunk_start + CHUNK_SIZE]
+        chunk_results = await asyncio.gather(
+            *[_scrape_with_sem(sem, r.asin, r.row, browser, proxy_manager) for r in chunk]
+        )
+        updates = [_format_update(res) for res in chunk_results]
+        try:
+            sheets_client.batch_update_rows(body.sheet_id, body.tab_name, updates)
+            logger.info("Wrote chunk rows %d–%d to sheets", chunk[0].row, chunk[-1].row)
+        except Exception:
+            logger.exception("Sheets write failed for chunk starting row %d", chunk[0].row)
+        all_results.extend(chunk_results)
+
+    return {"status": "success", "processed": len(all_results), "data": all_results}
+
+
+@router.post("/scrape-batch-stream")
+async def scrape_batch_stream(
+    body: ScrapeBatchRequest,
+    request: Request,
+    sheets_client: GoogleSheetsClient = Depends(get_sheets_client),
+):
+    """Stream scrape results as SSE events. Each ASIN result is sent as it completes.
+    Sheets are written every 50 results. Final event: {"done": true, "total": N}."""
+    browser = request.app.state.playwright_browser
+    proxy_manager = request.app.state.proxy_manager
+    sem = asyncio.Semaphore(SCRAPE_CONCURRENCY)
+    queue: asyncio.Queue = asyncio.Queue()
+    total = len(body.rows)
+
+    if total == 0:
+        async def empty_stream():
+            yield f"data: {json.dumps({'done': True, 'total': 0})}\n\n"
+        return StreamingResponse(empty_stream(), media_type="text/event-stream")
+
+    async def worker(row_data: ScrapeRow) -> None:
+        async with sem:
+            result = await scrape_amazon(row_data.asin, browser, proxy_manager)
+            result["row"] = row_data.row
+            await queue.put(result)
+
+    async def event_stream():
+        tasks = [asyncio.create_task(worker(r)) for r in body.rows]
+        done = 0
+        pending_updates: list[dict] = []
+
+        while done < total:
+            result = await queue.get()
+            done += 1
+            pending_updates.append(_format_update(result))
+
+            if len(pending_updates) >= CHUNK_SIZE or done == total:
+                try:
+                    sheets_client.batch_update_rows(body.sheet_id, body.tab_name, pending_updates)
+                    logger.info("Stream: wrote %d rows to sheets (%d/%d done)", len(pending_updates), done, total)
+                except Exception:
+                    logger.exception("Stream: sheets write failed at progress %d/%d", done, total)
+                pending_updates = []
+
+            payload = json.dumps({**result, "progress": done, "total": total})
+            yield f"data: {payload}\n\n"
+
+        await asyncio.gather(*tasks, return_exceptions=True)
+        yield f"data: {json.dumps({'done': True, 'total': total})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")

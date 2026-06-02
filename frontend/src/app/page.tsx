@@ -174,7 +174,7 @@ export default function Dashboard() {
       <header className={`sticky top-0 z-20 border-b ${borderClass} ${isDarkMode ? 'bg-neutral-950/80' : 'bg-white/80'} backdrop-blur-md`}>
         <div className="max-w-6xl mx-auto px-6 py-4 flex justify-between items-center">
           <div className="flex items-center space-x-3">
-            <Image src="/logo.png" alt="Logo" width={32} height={32} className="rounded object-contain" unoptimized />
+            <Image src="/logo.png" alt="Logo" width={48} height={48} className="rounded object-contain" unoptimized />
             <h1 className="text-xl font-bold tracking-tight">Price Scraper</h1>
           </div>
 
