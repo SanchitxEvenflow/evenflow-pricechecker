@@ -404,14 +404,13 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
             rating = _extract_rating(soup)
             rating_count = _extract_rating_count(soup)
 
-            rank_info = _extract_best_seller_rank(soup)
-            logger.info("BSR raw from Playwright: %r", rank_info["rank_raw"])
-
-            if not rank_info["rank_value"]:
-                logger.info("Playwright BSR empty — trying curl fallback for ASIN %s", asin)
-                rank_info = await _fetch_bsr_curl(asin, proxy)
-
-            category_info = _extract_category_hierarchy(soup)
+            # BSR / category extraction disabled — slow and unreliable; re-enable when ready
+            # rank_info = _extract_best_seller_rank(soup)
+            # logger.info("BSR raw from Playwright: %r", rank_info["rank_raw"])
+            # if not rank_info["rank_value"]:
+            #     logger.info("Playwright BSR empty — trying curl fallback for ASIN %s", asin)
+            #     rank_info = await _fetch_bsr_curl(asin, proxy)
+            # category_info = _extract_category_hierarchy(soup)
 
             buy_button = soup.select_one("#add-to-cart-button") or soup.select_one("#buy-now-button")
             final_status = "available" if (price and buy_button) else "price_found"
@@ -426,14 +425,14 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
                 "mrp": mrp,
                 "rating": rating,
                 "rating_count": rating_count,
-                "rank_raw": rank_info["rank_raw"],
-                "rank_value": rank_info["rank_value"],
-                "rank_category": rank_info["rank_category"],
-                "sub_rank_value": rank_info["sub_rank_value"],
-                "sub_rank_category": rank_info["sub_rank_category"],
-                "parent_node": category_info["parent_node"],
-                "child_node": category_info["child_node"],
-                "category_path": category_info["category_path"],
+                "rank_raw": None,
+                "rank_value": None,
+                "rank_category": None,
+                "sub_rank_value": None,
+                "sub_rank_category": None,
+                "parent_node": None,
+                "child_node": None,
+                "category_path": None,
                 "status": final_status,
                 "platform": "amazon",
                 "url": url,

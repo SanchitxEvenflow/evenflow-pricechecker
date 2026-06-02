@@ -13,9 +13,11 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from proxy.manager import ProxyManager
 from routes.price import router as price_router
+from routes.sheets import router as sheets_router
 from schemas.price import HealthResponse
 
 load_dotenv()
@@ -141,6 +143,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 # ── Routes ──────────────────────────────────────────────────────────────────
 
 app.include_router(price_router)
+app.include_router(sheets_router)
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -153,3 +156,12 @@ async def health_check():
         playwright_ready=getattr(app.state, "playwright_ready", False),
         timestamp=datetime.now(IST),
     )
+
+
+# ── Static Frontend ──────────────────────────────────────────────────────────
+
+frontend_dist = os.path.join(os.path.dirname(__file__), "frontend", "out")
+if os.path.exists(frontend_dist):
+    app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
+else:
+    logger.warning("Frontend build directory '%s' not found. Dashboard will not be served.", frontend_dist)

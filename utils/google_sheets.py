@@ -1,0 +1,122 @@
+import base64
+import json
+import logging
+import os
+from typing import Any
+
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+
+logger = logging.getLogger(__name__)
+
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+
+class GoogleSheetsClient:
+    def __init__(self):
+        self.credentials = self._load_credentials()
+        self.service = None
+        if self.credentials:
+            self.service = build("sheets", "v4", credentials=self.credentials)
+        else:
+            logger.warning("Google Sheets credentials not found. Sheets integration will fail.")
+
+    def _load_credentials(self) -> Credentials | None:
+        # 1. Try file path from standard GOOGLE_APPLICATION_CREDENTIALS
+        creds_file = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        logger.info("[Sheets] GOOGLE_APPLICATION_CREDENTIALS = %r", creds_file)
+        if creds_file:
+            exists = os.path.exists(creds_file)
+            logger.info("[Sheets] Credentials file exists on disk: %s", exists)
+            if exists:
+                try:
+                    creds = Credentials.from_service_account_file(creds_file, scopes=SCOPES)
+                    logger.info("[Sheets] Loaded credentials from file successfully.")
+                    return creds
+                except Exception as e:
+                    logger.error("Failed to load Google credentials from file: %s", e)
+        
+        # 2. Fallback to base64 env var
+        b64_creds = os.getenv("GOOGLE_CREDENTIALS_BASE64")
+        logger.info("[Sheets] GOOGLE_CREDENTIALS_BASE64 set: %s", bool(b64_creds))
+        if b64_creds:
+            try:
+                decoded = base64.b64decode(b64_creds).decode("utf-8")
+                info = json.loads(decoded)
+                return Credentials.from_service_account_info(info, scopes=SCOPES)
+            except Exception as e:
+                logger.error("Failed to load Google credentials from base64: %s", e)
+                
+        return None
+
+    def get_asins_with_rows(self, spreadsheet_id: str, tab_name: str) -> list[dict[str, Any]]:
+        """
+        Reads Column A and returns a list of dictionaries with row number and ASIN.
+        Skips the header row (row 1).
+        """
+        if not self.service:
+            raise ValueError("Google Sheets service not initialized (missing credentials).")
+
+        # Wrap tab name in single quotes to handle spaces and underscores
+        range_name = f"'{tab_name}'!A:A"
+        
+        result = self.service.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range=range_name
+        ).execute()
+
+        values = result.get("values", [])
+        
+        asins = []
+        # Start at index 1 to skip header (assuming row 1 is header)
+        for i in range(1, len(values)):
+            row_data = values[i]
+            if row_data and row_data[0].strip():
+                asins.append({
+                    "row": i + 1, # Sheets are 1-indexed, so index 1 -> row 2
+                    "asin": row_data[0].strip()
+                })
+                
+        return asins
+
+    def list_tabs(self, spreadsheet_id: str) -> list[str]:
+        """Returns all sheet/tab names in the spreadsheet."""
+        if not self.service:
+            raise ValueError("Google Sheets service not initialized (missing credentials).")
+        meta = self.service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+        return [s["properties"]["title"] for s in meta.get("sheets", [])]
+
+    def batch_update_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict[str, Any]]):
+        """
+        Updates multiple rows in the spreadsheet.
+        `updates` should be a list of dicts:
+        {
+            "row": 2,
+            "values": ["Price", "Rating", "Rating Count", "Parent Node", "Child Node", "Status", "Checked At"]
+        }
+        """
+        if not self.service:
+            raise ValueError("Google Sheets service not initialized (missing credentials).")
+
+        data = []
+        for update in updates:
+            row = update["row"]
+            vals = update["values"]
+            
+            # We update columns B through H
+            range_name = f"'{tab_name}'!B{row}:H{row}"
+            data.append({
+                "range": range_name,
+                "values": [vals]
+            })
+
+        body = {
+            "valueInputOption": "USER_ENTERED",
+            "data": data
+        }
+
+        result = self.service.spreadsheets().values().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body=body
+        ).execute()
+
+        return result
