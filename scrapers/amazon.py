@@ -76,6 +76,8 @@ DETAILS_SELECTORS = [
     "#productDetails_techSpec_section_1",
 ]
 
+_BLOCKED_RESOURCE_TYPES = {"image", "media", "font", "stylesheet"}
+
 
 def _extract_text(soup: BeautifulSoup, selectors: list[str]) -> str | None:
     for selector in selectors:
@@ -187,6 +189,13 @@ def _extract_category_hierarchy(soup: BeautifulSoup) -> dict:
         "child_node": child_node,
         "category_path": " > ".join(crumbs) if crumbs else None,
     }
+
+
+async def _block_resources(route) -> None:
+    if route.request.resource_type in _BLOCKED_RESOURCE_TYPES:
+        await route.abort()
+    else:
+        await route.continue_()
 
 
 def _detect_status(soup: BeautifulSoup, response_text: str, asin: str, page_url: str = "") -> str:
@@ -334,6 +343,7 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
     context = None
 
     for attempt in range(max_proxy_attempts + 1):  # +1 = direct-connection fallback
+        proxy = None
         try:
             delay = random.uniform(DELAY_MIN, DELAY_MAX)
             logger.info("Amazon scrape attempt %d/%d for ASIN %s — waiting %.1fs",
@@ -358,14 +368,11 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
 
             context = await browser.new_context(**context_opts)
             await context.add_init_script(STEALTH_SCRIPT)
+            await context.route("**/*", _block_resources)
             page = await context.new_page()
 
             logger.info("Navigating to %s via proxy=%s", url, proxy)
             await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            try:
-                await page.wait_for_load_state("networkidle", timeout=15000)
-            except Exception:
-                pass
 
             logger.info("Page landed at: %s", page.url)
             await _handle_interstitial(page)
@@ -441,6 +448,7 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
 
         except Exception as e:
             logger.exception("Amazon scrape error for ASIN %s (attempt %d): %s", asin, attempt + 1, str(e))
+            proxy_manager.report_failure(proxy)
             await _safe_close_context(context)
             context = None
             if attempt < max_proxy_attempts:

@@ -113,6 +113,25 @@ async def cron_status(request: Request):
     return status
 
 
+# ── New API endpoints ──────────────────────────────────────────────────────
+
+@router.post("/api/trigger-manual-scheduler")
+async def trigger_manual_scheduler(request: Request):
+    """Trigger a full scrape of all sheet ASINs, writing to a Manual_Trigger tab."""
+    if request.app.state.cron_status.get("is_running"):
+        raise HTTPException(status_code=409, detail="A scrape run is already in progress")
+    from scheduler import run_manual_trigger
+    asyncio.create_task(run_manual_trigger(request.app))
+    return {"status": "started"}
+
+
+@router.get("/api/logs")
+async def get_logs():
+    """Return all scraper run logs, newest first."""
+    from utils.run_logger import get_all_logs
+    return {"status": "success", "logs": get_all_logs()}
+
+
 @router.post("/scrape-batch")
 async def scrape_batch(
     body: ScrapeBatchRequest,

@@ -1,0 +1,311 @@
+INFO:     Started server process [325535]
+INFO:     Waiting for application startup.
+2026-06-02 20:15:58 | INFO    | main | Starting Price Checker service...
+2026-06-02 20:15:58 | INFO    | proxy.manager | Loaded 40 proxies from 'proxies.txt'
+2026-06-02 20:15:58 | INFO    | main | Proxy pool: 40 active, 0 dead
+2026-06-02 20:15:59 | INFO    | main | Playwright Chromium browser launched (headless=True)
+2026-06-02 20:15:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-06-02 20:15:59 | INFO    | apscheduler.scheduler | Added job "run_scheduled_scrape" to job store "default"
+2026-06-02 20:15:59 | INFO    | apscheduler.scheduler | Scheduler started
+2026-06-02 20:15:59 | INFO    | main | Cron scheduler active — interval=60 min
+2026-06-02 20:15:59 | INFO    | main | Price Checker service ready!
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+2026-06-02 20:16:07 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:16:07.333259+05:30]
+INFO:     127.0.0.1:50670 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+2026-06-02 20:16:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:16:38.436937+05:30]
+2026-06-02 20:16:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:16:38.438275+05:30]
+INFO:     127.0.0.1:60760 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60762 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:17:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:17:38.434233+05:30]
+2026-06-02 20:17:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:17:38.435416+05:30]
+INFO:     127.0.0.1:50882 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50888 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:18:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:18:38.434529+05:30]
+2026-06-02 20:18:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:18:38.435895+05:30]
+INFO:     127.0.0.1:41484 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41496 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:19:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:19:38.433923+05:30]
+2026-06-02 20:19:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:19:38.434934+05:30]
+INFO:     127.0.0.1:54202 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54210 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:20:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:20:38.434016+05:30]
+2026-06-02 20:20:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:20:38.435135+05:30]
+INFO:     127.0.0.1:40090 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:40092 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:21:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:21:38.433880+05:30]
+2026-06-02 20:21:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:21:38.434869+05:30]
+INFO:     127.0.0.1:49356 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49372 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:22:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:22:38.434373+05:30]
+2026-06-02 20:22:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:22:38.435520+05:30]
+INFO:     127.0.0.1:43190 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43206 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:23:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:23:38.433827+05:30]
+2026-06-02 20:23:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:23:38.435174+05:30]
+INFO:     127.0.0.1:52238 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52248 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:24:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:24:38.434042+05:30]
+2026-06-02 20:24:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:24:38.435044+05:30]
+INFO:     127.0.0.1:57698 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57702 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:25:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:25:38.434085+05:30]
+2026-06-02 20:25:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:25:38.435088+05:30]
+INFO:     127.0.0.1:44482 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44486 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:26:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:26:38.433496+05:30]
+2026-06-02 20:26:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:26:38.434512+05:30]
+INFO:     127.0.0.1:37980 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:37990 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:27:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:27:38.433489+05:30]
+2026-06-02 20:27:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:27:38.434466+05:30]
+INFO:     127.0.0.1:51034 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51046 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:28:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:28:38.431272+05:30]
+2026-06-02 20:28:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:28:38.431695+05:30]
+INFO:     127.0.0.1:50664 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50676 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:29:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:29:38.433964+05:30]
+2026-06-02 20:29:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:29:38.434866+05:30]
+INFO:     127.0.0.1:34586 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34596 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:30:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:30:38.433375+05:30]
+2026-06-02 20:30:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:30:38.434506+05:30]
+INFO:     127.0.0.1:40444 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:40458 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:31:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:31:38.433713+05:30]
+2026-06-02 20:31:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:31:38.434706+05:30]
+INFO:     127.0.0.1:59942 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59956 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:32:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:32:38.433430+05:30]
+2026-06-02 20:32:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:32:38.434505+05:30]
+INFO:     127.0.0.1:55990 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55998 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:33:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:33:38.433604+05:30]
+2026-06-02 20:33:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:33:38.434584+05:30]
+INFO:     127.0.0.1:48902 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48904 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:34:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:34:38.433769+05:30]
+2026-06-02 20:34:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:34:38.434853+05:30]
+INFO:     127.0.0.1:39898 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39908 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:35:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:35:38.433857+05:30]
+2026-06-02 20:35:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:35:38.434918+05:30]
+INFO:     127.0.0.1:42856 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42866 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:36:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:36:38.433598+05:30]
+2026-06-02 20:36:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:36:38.434532+05:30]
+INFO:     127.0.0.1:56656 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56672 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:37:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:37:38.433603+05:30]
+2026-06-02 20:37:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:37:38.434678+05:30]
+INFO:     127.0.0.1:50032 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50038 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:38:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:38:38.431196+05:30]
+2026-06-02 20:38:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:38:38.431658+05:30]
+INFO:     127.0.0.1:45488 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45502 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:39:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:39:38.433877+05:30]
+2026-06-02 20:39:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:39:38.434860+05:30]
+INFO:     127.0.0.1:44908 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44924 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:40:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:40:38.433960+05:30]
+2026-06-02 20:40:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:40:38.435170+05:30]
+INFO:     127.0.0.1:44946 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44962 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:41:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:41:38.433415+05:30]
+2026-06-02 20:41:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:41:38.434532+05:30]
+INFO:     127.0.0.1:59664 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59674 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:42:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:42:38.433528+05:30]
+2026-06-02 20:42:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:42:38.434442+05:30]
+INFO:     127.0.0.1:55814 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55816 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:43:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:43:38.433956+05:30]
+2026-06-02 20:43:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:43:38.435028+05:30]
+INFO:     127.0.0.1:40286 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:40294 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:44:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:44:38.433890+05:30]
+2026-06-02 20:44:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:44:38.435215+05:30]
+INFO:     127.0.0.1:56040 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56054 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:45:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:45:38.434097+05:30]
+2026-06-02 20:45:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:45:38.434257+05:30]
+INFO:     127.0.0.1:36408 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36424 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:46:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:46:38.433729+05:30]
+2026-06-02 20:46:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:46:38.434620+05:30]
+INFO:     127.0.0.1:42826 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42842 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:47:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:47:38.433561+05:30]
+2026-06-02 20:47:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:47:38.434435+05:30]
+INFO:     127.0.0.1:42982 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42998 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:48:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:48:38.433899+05:30]
+2026-06-02 20:48:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:48:38.434932+05:30]
+INFO:     127.0.0.1:41880 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41894 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:49:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:49:38.433676+05:30]
+2026-06-02 20:49:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:49:38.434616+05:30]
+INFO:     127.0.0.1:37116 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:37126 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:50:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:50:38.433956+05:30]
+2026-06-02 20:50:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:50:38.434986+05:30]
+INFO:     127.0.0.1:60880 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60884 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:51:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:51:38.433855+05:30]
+2026-06-02 20:51:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:51:38.434850+05:30]
+INFO:     127.0.0.1:33286 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33294 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:52:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:52:38.433468+05:30]
+2026-06-02 20:52:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:52:38.434631+05:30]
+INFO:     127.0.0.1:36648 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36658 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:53:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:53:38.433393+05:30]
+2026-06-02 20:53:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:53:38.434457+05:30]
+INFO:     127.0.0.1:52534 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52546 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:54:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:54:38.432672+05:30]
+2026-06-02 20:54:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:54:38.433593+05:30]
+INFO:     127.0.0.1:33612 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33614 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:55:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:55:38.433930+05:30]
+2026-06-02 20:55:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:55:38.434996+05:30]
+INFO:     127.0.0.1:47092 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47098 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:56:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:56:38.433661+05:30]
+2026-06-02 20:56:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:56:38.434701+05:30]
+INFO:     127.0.0.1:36660 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36672 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:57:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:57:38.433653+05:30]
+2026-06-02 20:57:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:57:38.434583+05:30]
+INFO:     127.0.0.1:57828 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57832 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:58:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:58:38.433633+05:30]
+2026-06-02 20:58:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:58:38.434591+05:30]
+INFO:     127.0.0.1:43468 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43482 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 20:59:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T20:59:38.433674+05:30]
+2026-06-02 20:59:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T20:59:38.434595+05:30]
+INFO:     127.0.0.1:41604 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41616 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 21:00:00 | INFO    | apscheduler.executors.default | Running job "run_scheduled_scrape (trigger: cron[hour='*/1', minute='0'], next run at: 2026-06-02 22:00:00 IST)" (scheduled at 2026-06-02 21:00:00+05:30)
+2026-06-02 21:00:00 | INFO    | utils.google_sheets | [Sheets] GOOGLE_APPLICATION_CREDENTIALS = 'google_service_account.json'
+2026-06-02 21:00:00 | INFO    | utils.google_sheets | [Sheets] Credentials file exists on disk: True
+2026-06-02 21:00:00 | INFO    | utils.google_sheets | [Sheets] Loaded credentials from file successfully.
+2026-06-02 21:00:00 | INFO    | googleapiclient.discovery_cache | file_cache is only supported with oauth2client<4.0.0
+2026-06-02 21:00:00 | INFO    | scheduler | Cron: starting automatic scrape — sheet=1rVBzv4ySg4h1SG33I-yLN49hEhHNbpXk8TkrTAeUMTI source_tab=Sheet1 started_at=21:00:00
+2026-06-02 21:00:01 | INFO    | utils.run_logger | Log created: run_id=bd15e777 type=automatic total=779
+2026-06-02 21:00:02 | ERROR   | scheduler | Cron: failed to create result tab 'Run_2026-06-02_21-00'
+Traceback (most recent call last):
+  File "/home/sanchit-kulkarni/Evenflow/price-checker/scheduler.py", line 58, in _run_full_scrape
+    sheets_client.create_tab(sheet_id, new_tab)
+  File "/home/sanchit-kulkarni/Evenflow/price-checker/utils/google_sheets.py", line 93, in create_tab
+    self.service.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body=body).execute()
+  File "/home/sanchit-kulkarni/Evenflow/price-checker/venv/lib/python3.12/site-packages/googleapiclient/_helpers.py", line 130, in positional_wrapper
+    return wrapped(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/sanchit-kulkarni/Evenflow/price-checker/venv/lib/python3.12/site-packages/googleapiclient/http.py", line 938, in execute
+    raise HttpError(resp, content, uri=self.uri)
+googleapiclient.errors.HttpError: <HttpError 400 when requesting https://sheets.googleapis.com/v4/spreadsheets/1rVBzv4ySg4h1SG33I-yLN49hEhHNbpXk8TkrTAeUMTI:batchUpdate?alt=json returned "Invalid requests[0].addSheet: A sheet with the name "Run_2026-06-02_21-00" already exists. Please enter another name.". Details: "Invalid requests[0].addSheet: A sheet with the name "Run_2026-06-02_21-00" already exists. Please enter another name.">
+2026-06-02 21:00:02 | ERROR   | utils.run_logger | Log failed: run_id=bd15e777 error=Failed to create tab 'Run_2026-06-02_21-00': <HttpError 400 when requesting https://sheets.googleapis.com/v4/spreadsheets/1rVBzv4ySg4h1SG33I-yLN49hEhHNbpXk8TkrTAeUMTI:batchUpdate?alt=json returned "Invalid requests[0].addSheet: A sheet with the name "Run_2026-06-02_21-00" already exists. Please enter another name.". Details: "Invalid requests[0].addSheet: A sheet with the name "Run_2026-06-02_21-00" already exists. Please enter another name.">
+2026-06-02 21:00:02 | INFO    | apscheduler.executors.default | Job "run_scheduled_scrape (trigger: cron[hour='*/1', minute='0'], next run at: 2026-06-02 22:00:00 IST)" executed successfully
+2026-06-02 21:00:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T21:00:38.432953+05:30]
+2026-06-02 21:00:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T21:00:38.433668+05:30]
+INFO:     127.0.0.1:53068 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53084 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 21:01:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T21:01:38.433375+05:30]
+2026-06-02 21:01:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T21:01:38.434367+05:30]
+INFO:     127.0.0.1:60366 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60372 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 21:02:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T21:02:38.431588+05:30]
+2026-06-02 21:02:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T21:02:38.432104+05:30]
+INFO:     127.0.0.1:40190 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:40206 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 21:03:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T21:03:38.432844+05:30]
+2026-06-02 21:03:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T21:03:38.434086+05:30]
+INFO:     127.0.0.1:51802 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51806 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 21:04:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T21:04:38.435824+05:30]
+2026-06-02 21:04:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T21:04:38.436769+05:30]
+INFO:     127.0.0.1:37590 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:37596 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 21:05:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T21:05:38.435296+05:30]
+2026-06-02 21:05:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T21:05:38.436110+05:30]
+INFO:     127.0.0.1:38592 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38594 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 21:06:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T21:06:38.434661+05:30]
+2026-06-02 21:06:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T21:06:38.440840+05:30]
+INFO:     127.0.0.1:53646 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53654 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 21:07:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T21:07:38.443119+05:30]
+INFO:     127.0.0.1:56568 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+2026-06-02 21:07:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T21:07:38.452526+05:30]
+INFO:     127.0.0.1:56580 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 21:08:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T21:08:38.432792+05:30]
+2026-06-02 21:08:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T21:08:38.433592+05:30]
+INFO:     127.0.0.1:57254 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57270 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 21:09:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T21:09:38.449220+05:30]
+2026-06-02 21:09:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T21:09:38.450307+05:30]
+INFO:     127.0.0.1:35286 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:35298 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 21:10:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T21:10:38.437569+05:30]
+2026-06-02 21:10:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T21:10:38.441028+05:30]
+INFO:     127.0.0.1:35744 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:35746 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 21:11:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T21:11:38.434354+05:30]
+INFO:     127.0.0.1:39782 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+2026-06-02 21:11:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T21:11:38.442890+05:30]
+INFO:     127.0.0.1:39782 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 21:12:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T21:12:38.436472+05:30]
+2026-06-02 21:12:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T21:12:38.437262+05:30]
+INFO:     127.0.0.1:44382 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44392 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 21:13:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T21:13:38.432107+05:30]
+2026-06-02 21:13:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T21:13:38.432890+05:30]
+INFO:     127.0.0.1:33126 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33130 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 21:14:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T21:14:38.433815+05:30]
+2026-06-02 21:14:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T21:14:38.434803+05:30]
+INFO:     127.0.0.1:46110 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46112 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 21:15:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T21:15:38.433424+05:30]
+2026-06-02 21:15:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T21:15:38.434386+05:30]
+INFO:     127.0.0.1:35418 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:35424 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 21:16:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T21:16:38.433897+05:30]
+2026-06-02 21:16:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T21:16:38.434974+05:30]
+INFO:     127.0.0.1:52194 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52204 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 21:17:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T21:17:38.433481+05:30]
+2026-06-02 21:17:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T21:17:38.434381+05:30]
+INFO:     127.0.0.1:38056 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38064 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 21:18:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T21:18:38.433284+05:30]
+2026-06-02 21:18:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T21:18:38.434301+05:30]
+INFO:     127.0.0.1:41610 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41618 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 21:19:19 | INFO    | main | → GET /health [2026-06-02T21:19:19.234423+05:30]
+INFO:     127.0.0.1:47060 - "GET /health HTTP/1.1" 200 OK
+2026-06-02 21:19:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T21:19:38.431291+05:30]
+2026-06-02 21:19:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T21:19:38.431698+05:30]
+INFO:     127.0.0.1:33954 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33964 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 21:20:32 | INFO    | main | → GET /sheets/api/logs [2026-06-02T21:20:32.562204+05:30]
+INFO:     127.0.0.1:49168 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+2026-06-02 21:20:34 | INFO    | main | → GET /sheets/cron-status [2026-06-02T21:20:34.553738+05:30]
+INFO:     127.0.0.1:49180 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+2026-06-02 21:20:38 | INFO    | main | → GET /sheets/cron-status [2026-06-02T21:20:38.431560+05:30]
+2026-06-02 21:20:38 | INFO    | main | → GET /sheets/api/logs [2026-06-02T21:20:38.432135+05:30]
+INFO:     127.0.0.1:49186 - "GET /sheets/cron-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49192 - "GET /sheets/api/logs HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+2026-06-02 21:21:36 | INFO    | main | Shutting down Price Checker service...
+2026-06-02 21:21:36 | INFO    | main | Cron scheduler stopped
+2026-06-02 21:21:36 | INFO    | apscheduler.scheduler | Scheduler has been shut down
+2026-06-02 21:21:36 | INFO    | main | Playwright browser closed
+2026-06-02 21:21:36 | INFO    | main | Playwright instance stopped
+INFO:     Application shutdown complete.
+INFO:     Finished server process [325535]

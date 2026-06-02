@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from proxy.manager import ProxyManager
 from routes.price import router as price_router
 from routes.sheets import router as sheets_router
+from routes.manual import router as manual_router
 from scheduler import setup_scheduler
 from schemas.price import HealthResponse
 
@@ -162,6 +163,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 app.include_router(price_router)
 app.include_router(sheets_router)
+app.include_router(manual_router)
 
 
 @app.get("/health", response_model=HealthResponse)

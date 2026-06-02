@@ -10,13 +10,21 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from utils.scrape_helpers import CHUNK_SIZE, SCRAPE_CONCURRENCY, format_update as _format_update
 from scrapers.amazon import scrape_amazon
 from utils.google_sheets import GoogleSheetsClient
+from utils import run_logger
 
 logger = logging.getLogger(__name__)
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
 
-async def run_scheduled_scrape(app) -> None:
+async def _run_full_scrape(app, tab_prefix: str, run_type: str) -> None:
+    """Core scrape logic shared by both automatic cron and manual trigger.
+
+    Args:
+        app: FastAPI app instance (for browser, proxy_manager, cron_status)
+        tab_prefix: Prefix for the new tab name (e.g. "Run" or "Manual_Trigger")
+        run_type: "automatic" or "manual" — used for logging
+    """
     sheets_client = GoogleSheetsClient()
     sheet_id = os.getenv("CRON_SHEET_ID") or os.getenv("SPREADSHEET_ID", "")
     source_tab = os.getenv("CRON_SOURCE_TAB") or os.getenv("WORKSHEET_NAME", "Sheet1")
@@ -26,8 +34,8 @@ async def run_scheduled_scrape(app) -> None:
         return
 
     run_start = datetime.now(IST)
-    logger.info("Cron: starting scheduled scrape — sheet=%s source_tab=%s started_at=%s",
-                sheet_id, source_tab, run_start.strftime("%H:%M:%S"))
+    logger.info("Cron: starting %s scrape — sheet=%s source_tab=%s started_at=%s",
+                run_type, sheet_id, source_tab, run_start.strftime("%H:%M:%S"))
 
     try:
         source_rows = sheets_client.get_asins_with_rows(sheet_id, source_tab)
@@ -40,16 +48,20 @@ async def run_scheduled_scrape(app) -> None:
         return
 
     now = datetime.now(IST)
-    new_tab = now.strftime("Run_%Y-%m-%d_%H-%M")
+    new_tab = f"{tab_prefix}_{now.strftime('%Y-%m-%d_%H-%M')}"
     asins = [r["asin"] for r in source_rows]
+
+    # Create log entry
+    run_id = run_logger.create_log(run_type, len(asins))
 
     try:
         sheets_client.create_tab(sheet_id, new_tab)
         sheets_client.write_header_and_asins(sheet_id, new_tab, asins)
         logger.info("Cron: created tab '%s' with %d ASINs", new_tab, len(asins))
-    except Exception:
+    except Exception as e:
         logger.exception("Cron: failed to create result tab '%s'", new_tab)
         app.state.cron_status.update({"is_running": False, "error": f"Failed to create tab '{new_tab}'"})
+        run_logger.fail_log(run_id, f"Failed to create tab '{new_tab}': {e}")
         return
 
     # Remap row numbers — header is row 1, ASINs start at row 2
@@ -77,6 +89,9 @@ async def run_scheduled_scrape(app) -> None:
             return result
 
     total_processed = 0
+    total_success = 0
+    total_failed = 0
+
     for chunk_start in range(0, len(remapped), CHUNK_SIZE):
         chunk = remapped[chunk_start : chunk_start + CHUNK_SIZE]
         try:
@@ -84,7 +99,17 @@ async def run_scheduled_scrape(app) -> None:
             updates = [_format_update(res) for res in chunk_results]
             sheets_client.batch_update_rows(sheet_id, new_tab, updates)
             total_processed += len(chunk_results)
+
+            # Count successes/failures
+            for res in chunk_results:
+                status = res.get("status", "error")
+                if status in ("error", "not_found", "blocked", "invalid_format"):
+                    total_failed += 1
+                else:
+                    total_success += 1
+
             app.state.cron_status["progress"] = total_processed
+            run_logger.update_progress(run_id, total_success, total_failed)
             logger.info("Cron: wrote chunk %d–%d to tab '%s' (%d/%d done)",
                         chunk[0]["row"], chunk[-1]["row"], new_tab, total_processed, len(remapped))
         except Exception:
@@ -101,6 +126,18 @@ async def run_scheduled_scrape(app) -> None:
         "last_run_processed": total_processed,
         "progress": total_processed,
     })
+
+    run_logger.complete_log(run_id, total_success, total_failed, new_tab)
+
+
+async def run_scheduled_scrape(app) -> None:
+    """Called by APScheduler on cron intervals."""
+    await _run_full_scrape(app, tab_prefix="Run", run_type="automatic")
+
+
+async def run_manual_trigger(app) -> None:
+    """Called when user manually triggers the full scrape from the UI."""
+    await _run_full_scrape(app, tab_prefix="Manual_Trigger", run_type="manual")
 
 
 def setup_scheduler(app) -> AsyncIOScheduler | None:

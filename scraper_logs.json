@@ -1,0 +1,47 @@
+[
+  {
+    "run_id": "bd15e777",
+    "type": "automatic",
+    "triggered_at": "2026-06-02T21:00:01.435643+05:30",
+    "completed_at": "2026-06-02T21:00:02.112295+05:30",
+    "total_asins": 779,
+    "success_count": 0,
+    "failed_count": 0,
+    "sheet_tab": null,
+    "status": "failed",
+    "error": "Failed to create tab 'Run_2026-06-02_21-00': <HttpError 400 when requesting https://sheets.googleapis.com/v4/spreadsheets/1rVBzv4ySg4h1SG33I-yLN49hEhHNbpXk8TkrTAeUMTI:batchUpdate?alt=json returned \"Invalid requests[0].addSheet: A sheet with the name \"Run_2026-06-02_21-00\" already exists. Please enter another name.\". Details: \"Invalid requests[0].addSheet: A sheet with the name \"Run_2026-06-02_21-00\" already exists. Please enter another name.\">"
+  },
+  {
+    "run_id": "ff30ecc0",
+    "type": "automatic",
+    "triggered_at": "2026-06-02T21:00:01.432534+05:30",
+    "completed_at": "2026-06-02T21:14:20.946566+05:30",
+    "total_asins": 779,
+    "success_count": 757,
+    "failed_count": 22,
+    "sheet_tab": "Run_2026-06-02_21-00",
+    "status": "completed"
+  },
+  {
+    "run_id": "eec46b0a",
+    "type": "manual",
+    "triggered_at": "2026-06-02T17:04:47.021212+05:30",
+    "completed_at": null,
+    "total_asins": 779,
+    "success_count": 487,
+    "failed_count": 13,
+    "sheet_tab": null,
+    "status": "in_progress"
+  },
+  {
+    "run_id": "d42b1b0e",
+    "type": "manual",
+    "triggered_at": "2026-06-02T16:47:28.790785+05:30",
+    "completed_at": null,
+    "total_asins": 779,
+    "success_count": 0,
+    "failed_count": 0,
+    "sheet_tab": null,
+    "status": "in_progress"
+  }
+]
