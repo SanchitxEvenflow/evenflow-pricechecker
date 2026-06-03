@@ -63,6 +63,15 @@ RATING_COUNT_SELECTORS = [
     "span[data-hook='total-review-count']",
 ]
 
+RATING_BREAKDOWN_SELECTORS = [
+    "div[data-csa-c-content-id='customerReviews-histogram']",
+    "#histogramTable",
+    "[data-hook='cr-ratings-histogram']",
+    ".cr-ratings-histogram",
+    "[data-hook='histogram-table']",
+    ".a-histogram",
+]
+
 BREADCRUMB_SELECTORS = [
     "#wayfinding-breadcrumbs_feature_div ul li span.a-list-item",
     "#wayfinding-breadcrumbs_container ul li span.a-list-item",
@@ -107,7 +116,24 @@ def _extract_rating_count(soup: BeautifulSoup) -> str | None:
             return match.group(1)
     return None
 
-
+def _extract_rating_breakdown(soup: BeautifulSoup) -> dict[str, str | None]:
+    breakdown = {"5_star": None, "4_star": None, "3_star": None, "2_star": None, "1_star": None}
+    container = None
+    for sel in RATING_BREAKDOWN_SELECTORS:
+        container = soup.select_one(sel)
+        if container:
+            break
+    search_root = container if container else soup
+    for el in search_root.find_all(attrs={"aria-label": True}):
+        label = el["aria-label"]
+        for i in range(5, 0, -1):
+            if breakdown[f"{i}_star"]:
+                continue
+            m = re.search(rf"(\d+)\s*percent.*?{i}\s*star", label, re.I) or \
+                re.search(rf"{i}\s*star.*?(\d+)\s*percent", label, re.I)
+            if m:
+                breakdown[f"{i}_star"] = f"{m.group(1)}%"
+    return breakdown
 
 def _extract_best_seller_rank(soup: BeautifulSoup) -> dict:
     empty = {
@@ -255,14 +281,18 @@ async def _handle_interstitial(page) -> bool:
         logger.info("Interstitial detected — attempting to click through")
         for selector in ["input[type='submit']", "button", "a:has-text('Continue shopping')"]:
             try:
-                await page.click(selector, timeout=3000)
+                await page.click(selector, timeout=4000)
                 break
             except Exception:
                 continue
 
         await page.wait_for_load_state("networkidle", timeout=15000)
+        # Wait for product title + ratings section
         try:
-            await page.wait_for_selector("#productTitle", timeout=8000)
+            await page.wait_for_selector("#productTitle", timeout=10000)
+            # Wait extra for ratings widget
+            await page.wait_for_selector("[data-hook*='ratings'], .cr-ratings-histogram, #acrCustomerReviewLink", 
+                                         timeout=8000)
         except Exception:
             pass
 
@@ -322,6 +352,39 @@ async def _fetch_bsr_curl(asin: str, proxy_url: str | None) -> dict:
     return await asyncio.to_thread(_fetch_bsr_curl_sync, asin, proxy_url)
 
 
+def _fetch_rating_breakdown_curl_sync(asin: str) -> dict[str, str | None]:
+    """Fetch histogram via direct curl_cffi request.
+
+    Proxies return a bot-check page for curl traffic, so we go direct.
+    curl_cffi has no JS execution → Amazon serves a-no-js static HTML with the histogram table.
+    """
+    _empty = {"5_star": None, "4_star": None, "3_star": None, "2_star": None, "1_star": None}
+    url = f"https://www.amazon.in/dp/{asin}"
+    try:
+        resp = curl_requests.get(
+            url,
+            impersonate="chrome120",
+            proxies=None,
+            timeout=20,
+            headers={
+                "Accept-Language": "en-IN,en;q=0.9",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            },
+        )
+        if resp.status_code != 200:
+            logger.warning("Histogram curl: HTTP %d for ASIN %s", resp.status_code, asin)
+            return _empty
+        soup = BeautifulSoup(resp.text, "html.parser")
+        return _extract_rating_breakdown(soup)
+    except Exception as e:
+        logger.warning("Histogram curl error for ASIN %s: %s", asin, e)
+        return _empty
+
+
+async def _fetch_rating_breakdown_curl(asin: str) -> dict[str, str | None]:
+    return await asyncio.to_thread(_fetch_rating_breakdown_curl_sync, asin)
+
+
 async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager) -> dict:
     """
     Scrape Amazon.in product page for price data using a real Playwright browser context.
@@ -333,6 +396,7 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
 
     _empty = {
         "asin": asin, "price": "", "mrp": None, "rating": None, "rating_count": None,
+        "rating_breakdown": None,
         "rank_raw": None, "rank_value": None, "rank_category": None,
         "sub_rank_value": None, "sub_rank_category": None,
         "parent_node": None, "child_node": None, "category_path": None,
@@ -383,6 +447,7 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
             except Exception:
                 pass  # _detect_status will return not_found if still missing
 
+
             html = await page.content()
             body_text = await page.inner_text("body")
             soup = BeautifulSoup(html, "html.parser")
@@ -410,6 +475,7 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
             mrp = _extract_text(soup, MRP_SELECTORS)
             rating = _extract_rating(soup)
             rating_count = _extract_rating_count(soup)
+            rating_breakdown = await _fetch_rating_breakdown_curl(asin)
 
             # BSR / category extraction disabled — slow and unreliable; re-enable when ready
             # rank_info = _extract_best_seller_rank(soup)
@@ -432,6 +498,7 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
                 "mrp": mrp,
                 "rating": rating,
                 "rating_count": rating_count,
+                "rating_breakdown": rating_breakdown,
                 "rank_raw": None,
                 "rank_value": None,
                 "rank_category": None,

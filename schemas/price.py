@@ -63,6 +63,7 @@ class AmazonResponse(BaseModel):
     mrp: str | None = None
     rating: str | None = None
     rating_count: str | None = None
+    rating_breakdown: dict[str, str | None] | None = None
     rank_raw: str | None = None
     rank_value: str | None = None
     rank_category: str | None = None

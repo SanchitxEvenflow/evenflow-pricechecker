@@ -37,6 +37,7 @@ async def check_amazon_price(body: AmazonRequest, request: Request):
         mrp=result.get("mrp"),
         rating=result.get("rating"),
         rating_count=result.get("rating_count"),
+        rating_breakdown=result.get("rating_breakdown"),
         rank_raw=result.get("rank_raw"),
         rank_value=result.get("rank_value"),
         rank_category=result.get("rank_category"),
