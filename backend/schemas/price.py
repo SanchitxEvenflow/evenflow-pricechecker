@@ -106,3 +106,30 @@ class HealthResponse(BaseModel):
     proxy_pool_size: int
     playwright_ready: bool
     timestamp: datetime
+
+
+# ── Blinkit Models ──────────────────────────────────────────────────────────
+
+class BlinkitRequest(BaseModel):
+    product_id: str
+    city: str
+
+
+class BlinkitAllCitiesRequest(BaseModel):
+    product_ids: list[str]
+
+
+class BlinkitCityResult(BaseModel):
+    product_id: str
+    city: str
+    title: str | None = None
+    price: float | None = None
+    mrp: float | None = None
+    status: str
+    is_sold_out: bool = False
+    url: str
+    checked_at: str
+
+
+class BlinkitResponse(BlinkitCityResult):
+    pass

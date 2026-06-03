@@ -4,6 +4,12 @@
 SCRAPE_CONCURRENCY = 30
 CHUNK_SIZE = 50
 
+# Canonical city order — must match blinkit/locations.py LOCATIONS list
+BLINKIT_CITIES = [
+    "Bangalore", "NCR", "Mumbai", "Hyderabad", "Kolkata",
+    "Pune", "Ahmedabad", "Chennai", "Patna", "Dehradun",
+]
+
 
 def format_breakdown(breakdown: dict | None) -> str:
     if not breakdown:
@@ -14,6 +20,25 @@ def format_breakdown(breakdown: dict | None) -> str:
         if val:
             parts.append(f"{star[0]}★:{val}")
     return " ".join(parts)
+
+
+def format_blinkit_row(results_by_city: dict) -> list:
+    """Flatten per-city Blinkit results into a single sheet row.
+
+    Returns a list of 30 values: [price, mrp, status] × 10 cities in BLINKIT_CITIES order.
+    """
+    values = []
+    for city in BLINKIT_CITIES:
+        r = results_by_city.get(city, {})
+        price = r.get("price")
+        mrp = r.get("mrp")
+        status = r.get("status", "")
+        values.extend([
+            str(price) if price is not None else "",
+            str(mrp) if mrp is not None else "",
+            status,
+        ])
+    return values
 
 
 def format_update(res: dict) -> dict:

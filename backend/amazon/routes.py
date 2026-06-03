@@ -165,6 +165,16 @@ async def trigger_manual_scheduler(request: Request):
     asyncio.create_task(run_manual_trigger(request.app))
     return {"status": "started"}
 
+@sheets_router.post("/api/trigger-manual-blinkit")
+async def trigger_manual_blinkit(request: Request):
+    """Trigger a full scrape of all Blinkit PIDs across 10 cities."""
+    if request.app.state.blinkit_cron_status.get("is_running"):
+        raise HTTPException(status_code=409, detail="A Blinkit scrape run is already in progress")
+    from scheduler import run_manual_blinkit_trigger
+    asyncio.create_task(run_manual_blinkit_trigger(request.app))
+    return {"status": "started"}
+
+
 
 @sheets_router.get("/api/logs")
 async def get_logs():

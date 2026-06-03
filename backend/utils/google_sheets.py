@@ -20,6 +20,11 @@ class GoogleSheetsClient:
         else:
             logger.warning("Google Sheets credentials not found. Sheets integration will fail.")
 
+    @staticmethod
+    def _tab(name: str) -> str:
+        """Escape a tab name for use in Sheets API range strings (doubles internal single quotes)."""
+        return f"'{name.replace(chr(39), chr(39) + chr(39))}'"
+
     def _load_credentials(self) -> Credentials | None:
         # 1. Try file path from standard GOOGLE_APPLICATION_CREDENTIALS
         creds_file = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
@@ -56,8 +61,7 @@ class GoogleSheetsClient:
         if not self.service:
             raise ValueError("Google Sheets service not initialized (missing credentials).")
 
-        # Wrap tab name in single quotes to handle spaces and underscores
-        range_name = f"'{tab_name}'!A:A"
+        range_name = f"{self._tab(tab_name)}!A:A"
         
         result = self.service.spreadsheets().values().get(
             spreadsheetId=spreadsheet_id,
@@ -102,9 +106,51 @@ class GoogleSheetsClient:
         rows.extend([[a] for a in asins])
         self.service.spreadsheets().values().update(
             spreadsheetId=spreadsheet_id,
-            range=f"'{tab_name}'!A1",
+            range=f"{self._tab(tab_name)}!A1",
             valueInputOption="USER_ENTERED",
             body={"values": rows},
+        ).execute()
+
+    def write_blinkit_header_and_pids(self, spreadsheet_id: str, tab_name: str, pids: list[str]) -> None:
+        """Write wide-format header + PID list to a newly created Blinkit result tab.
+
+        Header: PID | {City} Price | {City} MRP | {City} Status  ×  10 cities  (31 columns total)
+        PIDs are written to column A rows 2+.
+        """
+        if not self.service:
+            raise ValueError("Google Sheets service not initialized (missing credentials).")
+        from utils.scrape_helpers import BLINKIT_CITIES
+        city_cols = []
+        for city in BLINKIT_CITIES:
+            city_cols.extend([f"{city} Price", f"{city} MRP", f"{city} Status"])
+        header = ["PID"] + city_cols
+        rows: list[list[str]] = [header] + [[pid] for pid in pids]
+        self.service.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id,
+            range=f"{self._tab(tab_name)}!A1",
+            valueInputOption="USER_ENTERED",
+            body={"values": rows},
+        ).execute()
+
+    def batch_update_blinkit_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict[str, Any]]):
+        """Batch-update Blinkit result rows.
+
+        Each update: {"row": int, "values": [price, mrp, status] × 10 cities}
+        Updates columns B through AE (30 values per row).
+        """
+        if not self.service:
+            raise ValueError("Google Sheets service not initialized (missing credentials).")
+        data = []
+        for update in updates:
+            row = update["row"]
+            vals = update["values"]
+            data.append({
+                "range": f"{self._tab(tab_name)}!B{row}:AE{row}",
+                "values": [vals],
+            })
+        body = {"valueInputOption": "USER_ENTERED", "data": data}
+        return self.service.spreadsheets().values().batchUpdate(
+            spreadsheetId=spreadsheet_id, body=body
         ).execute()
 
     def batch_update_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict[str, Any]]):
@@ -125,7 +171,7 @@ class GoogleSheetsClient:
             vals = update["values"]
             
             # We update columns B through K
-            range_name = f"'{tab_name}'!B{row}:K{row}"
+            range_name = f"{self._tab(tab_name)}!B{row}:K{row}"
             data.append({
                 "range": range_name,
                 "values": [vals]

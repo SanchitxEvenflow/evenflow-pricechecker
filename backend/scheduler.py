@@ -7,8 +7,12 @@ from datetime import datetime, timezone, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from utils.scrape_helpers import CHUNK_SIZE, SCRAPE_CONCURRENCY, format_update as _format_update
+from functools import partial
+
+from utils.scrape_helpers import CHUNK_SIZE, SCRAPE_CONCURRENCY, format_update as _format_update, BLINKIT_CITIES, format_blinkit_row
 from amazon.scraper import scrape_amazon
+from blinkit.scraper import fetch_blinkit_data
+from blinkit.locations import LOCATIONS
 from utils.google_sheets import GoogleSheetsClient
 from utils import run_logger
 
@@ -138,6 +142,153 @@ async def run_scheduled_scrape(app) -> None:
 async def run_manual_trigger(app) -> None:
     """Called when user manually triggers the full scrape from the UI."""
     await _run_full_scrape(app, tab_prefix="Manual_Trigger", run_type="manual")
+
+
+async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str) -> None:
+    """Core scrape logic for Blinkit sheet-based runs.
+
+    Reads PIDs from BLINKIT_SHEET_ID / BLINKIT_SOURCE_TAB, scrapes all 10 cities
+    per PID, and writes a wide-format result tab.
+    """
+    sheets_client = GoogleSheetsClient()
+    sheet_id = os.getenv("BLINKIT_SHEET_ID", "")
+    source_tab = os.getenv("BLINKIT_SOURCE_TAB", "Sheet1")
+
+    if not sheet_id:
+        logger.error("Blinkit: no sheet ID configured (set BLINKIT_SHEET_ID)")
+        return
+
+    run_start = datetime.now(IST)
+    logger.info("Blinkit: starting %s scrape — sheet=%s source_tab=%s started_at=%s",
+                run_type, sheet_id, source_tab, run_start.strftime("%H:%M:%S"))
+
+    try:
+        source_rows = sheets_client.get_asins_with_rows(sheet_id, source_tab)
+    except Exception:
+        logger.exception("Blinkit: failed to read PIDs from source tab")
+        return
+
+    if not source_rows:
+        logger.warning("Blinkit: no PIDs found in source tab '%s' — skipping", source_tab)
+        return
+
+    now = datetime.now(IST)
+    new_tab = f"{tab_prefix}_{now.strftime('%Y-%m-%d_%H-%M')}"
+    pids = [r["asin"] for r in source_rows]  # get_asins_with_rows uses "asin" key
+    total_combinations = len(pids) * len(LOCATIONS)
+
+    run_id = run_logger.create_log(run_type, total_combinations)
+
+    try:
+        sheets_client.create_tab(sheet_id, new_tab)
+        sheets_client.write_blinkit_header_and_pids(sheet_id, new_tab, pids)
+        logger.info("Blinkit: created tab '%s' with %d PIDs (%d total combinations)",
+                    new_tab, len(pids), total_combinations)
+    except Exception as e:
+        logger.exception("Blinkit: failed to create result tab '%s'", new_tab)
+        app.state.blinkit_cron_status.update({"is_running": False, "error": f"Failed to create tab '{new_tab}'"})
+        run_logger.fail_log(run_id, f"Failed to create tab '{new_tab}': {e}")
+        return
+
+    app.state.blinkit_cron_status.update({
+        "is_running": True,
+        "last_run_at": run_start.isoformat(),
+        "last_run_tab": new_tab,
+        "progress": 0,
+        "total": total_combinations,
+        "last_run_duration_seconds": None,
+        "last_run_processed": None,
+        "error": None,
+    })
+
+    proxy_manager = app.state.proxy_manager
+    sem = asyncio.Semaphore(5)  # Blinkit rate-limits aggressively
+    loop = asyncio.get_event_loop()
+
+    async def scrape_one_city(pid: str, loc: dict) -> dict:
+        async with sem:
+            proxy = proxy_manager.get_proxy()
+            result = await loop.run_in_executor(
+                None,
+                partial(
+                    fetch_blinkit_data,
+                    item_id=pid,
+                    pincode=loc["pincode"],
+                    lat=loc["lat"],
+                    lon=loc["lng"],
+                    city=loc["name"],
+                    proxy=proxy,
+                ),
+            )
+            if result.get("status") == "error":
+                proxy_manager.report_failure(proxy)
+            else:
+                proxy_manager.report_success(proxy)
+            return result
+
+    # Build all work items: pid × city
+    work_items = [(pid, loc) for pid in pids for loc in LOCATIONS]
+    tasks = [scrape_one_city(pid, loc) for pid, loc in work_items]
+
+    # Gather all results while tracking progress
+    results_by_pid: dict[str, dict] = {pid: {} for pid in pids}
+    total_done = 0
+    total_success = 0
+    total_failed = 0
+
+    for coro in asyncio.as_completed(tasks):
+        result = await coro
+        pid = result.get("product_id", "")
+        city = result.get("city", "")
+        if pid and city:
+            results_by_pid[pid][city] = result
+
+        total_done += 1
+        status = result.get("status", "error")
+        if status in ("error",):
+            total_failed += 1
+        else:
+            total_success += 1
+
+        app.state.blinkit_cron_status["progress"] = total_done
+        if total_done % 10 == 0 or total_done == total_combinations:
+            run_logger.update_progress(run_id, total_success, total_failed)
+
+    logger.info("Blinkit: all %d combinations scraped — writing to sheet", total_combinations)
+
+    # Write all rows to sheet: row 2 = pids[0], row 3 = pids[1], ...
+    sheet_updates = []
+    for i, pid in enumerate(pids):
+        city_results = results_by_pid.get(pid, {})
+        sheet_updates.append({
+            "row": i + 2,
+            "values": format_blinkit_row(city_results),
+        })
+
+    try:
+        sheets_client.batch_update_blinkit_rows(sheet_id, new_tab, sheet_updates)
+        logger.info("Blinkit: wrote %d rows to tab '%s'", len(sheet_updates), new_tab)
+    except Exception:
+        logger.exception("Blinkit: sheet write failed")
+
+    elapsed = datetime.now(IST) - run_start
+    minutes, seconds = divmod(int(elapsed.total_seconds()), 60)
+    logger.info("Blinkit: run complete — %d PIDs, %d cities each | tab '%s' | time: %dm %ds",
+                len(pids), len(LOCATIONS), new_tab, minutes, seconds)
+
+    app.state.blinkit_cron_status.update({
+        "is_running": False,
+        "last_run_duration_seconds": int(elapsed.total_seconds()),
+        "last_run_processed": total_done,
+        "progress": total_done,
+    })
+
+    run_logger.complete_log(run_id, total_success, total_failed, new_tab)
+
+
+async def run_manual_blinkit_trigger(app) -> None:
+    """Called when user manually triggers the Blinkit full scrape from the UI."""
+    await _run_full_blinkit_scrape(app, tab_prefix="Blinkit_Manual", run_type="blinkit_manual")
 
 
 def setup_scheduler(app) -> AsyncIOScheduler | None:
