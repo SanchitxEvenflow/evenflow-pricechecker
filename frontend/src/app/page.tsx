@@ -5,8 +5,15 @@ import Image from "next/image";
 const API = "";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
+interface RatingBreakdown {
+  "5_star"?: string | null; "4_star"?: string | null; "3_star"?: string | null;
+  "2_star"?: string | null; "1_star"?: string | null;
+}
 interface ScrapeResult {
   asin: string; price?: string; rating?: string; rating_count?: string;
+  rating_breakdown?: RatingBreakdown | null;
+  parent_node?: string | null; rank_value?: string | null;
+  child_node?: string | null; sub_rank_value?: string | null;
   status: string; progress?: number; total?: number; done?: boolean;
 }
 interface LogEntry {
@@ -231,21 +238,34 @@ function HomePage({ t, dark }: { t: any; dark: boolean }) {
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className={`border-b ${t.border} ${t.thead}`}>
-                  {["ASIN", "Status", "Price", "Rating", "Rating Count"].map(h => (
-                    <th key={h} className={`px-6 py-4 text-xs font-semibold ${t.muted} uppercase tracking-wider`}>{h}</th>
+                  {["ASIN", "Status", "Price", "Rating", "Rating Count", "Rating Breakdown", "Parent Node", "Parent Rank", "Child Node", "Child Rank"].map(h => (
+                    <th key={h} className={`px-4 py-4 text-xs font-semibold ${t.muted} uppercase tracking-wider`}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody className={`divide-y ${t.border}`}>
-                {results.map(r => (
-                  <tr key={r.asin} className="transition-colors">
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium font-mono">{r.asin}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm"><Badge status={r.status} /></td>
-                    <td className={`px-6 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.price || "—"}</td>
-                    <td className={`px-6 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.rating ? `${r.rating} ★` : "—"}</td>
-                    <td className={`px-6 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.rating_count || "—"}</td>
-                  </tr>
-                ))}
+                {results.map(r => {
+                  const bd = r.rating_breakdown;
+                  const bdStr = bd
+                    ? ["5_star","4_star","3_star","2_star","1_star"]
+                        .map(k => bd[k as keyof RatingBreakdown] ? `${k[0]}★:${bd[k as keyof RatingBreakdown]}` : null)
+                        .filter(Boolean).join(" ")
+                    : null;
+                  return (
+                    <tr key={r.asin} className="transition-colors">
+                      <td className="px-4 py-4 whitespace-nowrap text-sm font-medium font-mono">{r.asin}</td>
+                      <td className="px-4 py-4 whitespace-nowrap text-sm"><Badge status={r.status} /></td>
+                      <td className={`px-4 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.price || "—"}</td>
+                      <td className={`px-4 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.rating ? `${r.rating} ★` : "—"}</td>
+                      <td className={`px-4 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.rating_count || "—"}</td>
+                      <td className={`px-4 py-4 text-xs ${t.muted} font-mono`}>{bdStr || "—"}</td>
+                      <td className={`px-4 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.parent_node || "—"}</td>
+                      <td className={`px-4 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.rank_value ? `#${r.rank_value}` : "—"}</td>
+                      <td className={`px-4 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.child_node || "—"}</td>
+                      <td className={`px-4 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.sub_rank_value ? `#${r.sub_rank_value}` : "—"}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

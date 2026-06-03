@@ -97,7 +97,7 @@ class GoogleSheetsClient:
         if not self.service:
             raise ValueError("Google Sheets service not initialized (missing credentials).")
         rows: list[list[str]] = [
-            ["ASIN", "Price", "Rating", "Rating Count", "Parent Node", "Child Node", "Status", "Checked At"]
+            ["ASIN", "Price", "Rating", "Rating Count", "Rating Breakdown", "Parent Node", "Parent Node Rank", "Child Node", "Child Node Rank", "Status", "Checked At"]
         ]
         rows.extend([[a] for a in asins])
         self.service.spreadsheets().values().update(
@@ -124,8 +124,8 @@ class GoogleSheetsClient:
             row = update["row"]
             vals = update["values"]
             
-            # We update columns B through H
-            range_name = f"'{tab_name}'!B{row}:H{row}"
+            # We update columns B through K
+            range_name = f"'{tab_name}'!B{row}:K{row}"
             data.append({
                 "range": range_name,
                 "values": [vals]

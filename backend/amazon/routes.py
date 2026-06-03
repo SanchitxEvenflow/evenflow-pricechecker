@@ -1,22 +1,63 @@
+"""Amazon price checking & sheets API routes."""
+
 import asyncio
 import json
 import logging
 import os
-from typing import Any, List, Optional
+import re
+from typing import List
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from scrapers.amazon import scrape_amazon
+from amazon.scraper import scrape_amazon
+from schemas.price import AmazonRequest, AmazonResponse
 from utils.google_sheets import GoogleSheetsClient
 from utils.scrape_helpers import CHUNK_SIZE, SCRAPE_CONCURRENCY, format_update
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/sheets", tags=["Sheets"])
 
 IST = timezone(timedelta(hours=5, minutes=30))
+
+# ── Amazon Price Router ─────────────────────────────────────────────────────
+
+price_router = APIRouter(prefix="/price", tags=["Price"])
+
+
+@price_router.post("/amazon", response_model=AmazonResponse)
+async def check_amazon_price(body: AmazonRequest, request: Request):
+    """Scrape Amazon.in for product price by ASIN."""
+    proxy_manager = request.app.state.proxy_manager
+    browser = request.app.state.playwright_browser
+
+    result = await scrape_amazon(body.asin, browser, proxy_manager)
+
+    return AmazonResponse(
+        asin=result["asin"],
+        price=result.get("price", ""),
+        mrp=result.get("mrp"),
+        rating=result.get("rating"),
+        rating_count=result.get("rating_count"),
+        rating_breakdown=result.get("rating_breakdown"),
+        rank_raw=result.get("rank_raw"),
+        rank_value=result.get("rank_value"),
+        rank_category=result.get("rank_category"),
+        sub_rank_value=result.get("sub_rank_value"),
+        sub_rank_category=result.get("sub_rank_category"),
+        parent_node=result.get("parent_node"),
+        child_node=result.get("child_node"),
+        category_path=result.get("category_path"),
+        status=result["status"],
+        url=result["url"],
+        checked_at=result["checked_at"],
+    )
+
+
+# ── Sheets Router ───────────────────────────────────────────────────────────
+
+sheets_router = APIRouter(prefix="/sheets", tags=["Sheets"])
 
 
 def get_sheets_client():
@@ -34,7 +75,7 @@ class ScrapeRow(BaseModel):
 class ScrapeBatchRequest(BaseModel):
     sheet_id: str
     tab_name: str
-    rows: List[ScrapeRow]
+    rows: List[dict]
 
 class PreviewResponse(BaseModel):
     status: str
@@ -56,7 +97,7 @@ async def _scrape_with_sem(sem: asyncio.Semaphore, asin: str, row: int, browser,
         return result
 
 
-@router.get("/config", response_model=ConfigResponse)
+@sheets_router.get("/config", response_model=ConfigResponse)
 async def get_config():
     """Returns default config from environment variables."""
     return ConfigResponse(
@@ -64,7 +105,7 @@ async def get_config():
         worksheet_name=os.getenv("WORKSHEET_NAME", "Sheet1")
     )
 
-@router.get("/list-tabs")
+@sheets_router.get("/list-tabs")
 async def list_tabs(sheet_id: str, sheets_client: GoogleSheetsClient = Depends(get_sheets_client)):
     """Returns all tab names in the spreadsheet — use this to find the correct tab name."""
     try:
@@ -74,7 +115,7 @@ async def list_tabs(sheet_id: str, sheets_client: GoogleSheetsClient = Depends(g
         logger.exception("Failed to list tabs")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/preview", response_model=PreviewResponse)
+@sheets_router.post("/preview", response_model=PreviewResponse)
 async def preview_sheet(body: PreviewRequest, sheets_client: GoogleSheetsClient = Depends(get_sheets_client)):
     try:
         asins = sheets_client.get_asins_with_rows(body.sheet_id, body.tab_name)
@@ -88,7 +129,7 @@ async def preview_sheet(body: PreviewRequest, sheets_client: GoogleSheetsClient 
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/cron-trigger")
+@sheets_router.post("/cron-trigger")
 async def cron_trigger(request: Request):
     """Manually fire the scheduled scrape job immediately (runs in background)."""
     if request.app.state.cron_status.get("is_running"):
@@ -98,7 +139,7 @@ async def cron_trigger(request: Request):
     return {"status": "started"}
 
 
-@router.get("/cron-status")
+@sheets_router.get("/cron-status")
 async def cron_status(request: Request):
     """Return current cron scheduler status and next run time."""
     status = dict(getattr(request.app.state, "cron_status", {}))
@@ -115,7 +156,7 @@ async def cron_status(request: Request):
 
 # ── New API endpoints ──────────────────────────────────────────────────────
 
-@router.post("/api/trigger-manual-scheduler")
+@sheets_router.post("/api/trigger-manual-scheduler")
 async def trigger_manual_scheduler(request: Request):
     """Trigger a full scrape of all sheet ASINs, writing to a Manual_Trigger tab."""
     if request.app.state.cron_status.get("is_running"):
@@ -125,14 +166,14 @@ async def trigger_manual_scheduler(request: Request):
     return {"status": "started"}
 
 
-@router.get("/api/logs")
+@sheets_router.get("/api/logs")
 async def get_logs():
     """Return all scraper run logs, newest first."""
     from utils.run_logger import get_all_logs
     return {"status": "success", "logs": get_all_logs()}
 
 
-@router.post("/scrape-batch")
+@sheets_router.post("/scrape-batch")
 async def scrape_batch(
     body: ScrapeBatchRequest,
     request: Request,
@@ -151,20 +192,20 @@ async def scrape_batch(
     for chunk_start in range(0, len(body.rows), CHUNK_SIZE):
         chunk = body.rows[chunk_start : chunk_start + CHUNK_SIZE]
         chunk_results = await asyncio.gather(
-            *[_scrape_with_sem(sem, r.asin, r.row, browser, proxy_manager) for r in chunk]
+            *[_scrape_with_sem(sem, r["asin"], r["row"], browser, proxy_manager) for r in chunk]
         )
         updates = [_format_update(res) for res in chunk_results]
         try:
             sheets_client.batch_update_rows(body.sheet_id, body.tab_name, updates)
-            logger.info("Wrote chunk rows %d–%d to sheets", chunk[0].row, chunk[-1].row)
+            logger.info("Wrote chunk rows %d–%d to sheets", chunk[0]["row"], chunk[-1]["row"])
         except Exception:
-            logger.exception("Sheets write failed for chunk starting row %d", chunk[0].row)
+            logger.exception("Sheets write failed for chunk starting row %d", chunk[0]["row"])
         all_results.extend(chunk_results)
 
     return {"status": "success", "processed": len(all_results), "data": all_results}
 
 
-@router.post("/scrape-batch-stream")
+@sheets_router.post("/scrape-batch-stream")
 async def scrape_batch_stream(
     body: ScrapeBatchRequest,
     request: Request,
@@ -183,10 +224,10 @@ async def scrape_batch_stream(
             yield f"data: {json.dumps({'done': True, 'total': 0})}\n\n"
         return StreamingResponse(empty_stream(), media_type="text/event-stream")
 
-    async def worker(row_data: ScrapeRow) -> None:
+    async def worker(row_data: dict) -> None:
         async with sem:
-            result = await scrape_amazon(row_data.asin, browser, proxy_manager)
-            result["row"] = row_data.row
+            result = await scrape_amazon(row_data["asin"], browser, proxy_manager)
+            result["row"] = row_data["row"]
             await queue.put(result)
 
     async def event_stream():
@@ -208,6 +249,94 @@ async def scrape_batch_stream(
                 pending_updates = []
 
             payload = json.dumps({**result, "progress": done, "total": total})
+            yield f"data: {payload}\n\n"
+
+        await asyncio.gather(*tasks, return_exceptions=True)
+        yield f"data: {json.dumps({'done': True, 'total': total})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+# ── Manual Scrape Router ────────────────────────────────────────────────────
+
+manual_router = APIRouter(prefix="/api", tags=["Manual"])
+
+
+class ManualScrapeRequest(BaseModel):
+    asins: List[str]
+
+
+def _validate_asin(asin: str) -> bool:
+    """ASIN must be exactly 10 alphanumeric characters."""
+    return bool(re.match(r"^[A-Z0-9]{10}$", asin.strip().upper()))
+
+
+@manual_router.post("/scrape-manual")
+async def scrape_manual(body: ManualScrapeRequest, request: Request):
+    """Scrape a list of ASINs manually. Results are streamed via SSE — no sheet writes."""
+    browser = request.app.state.playwright_browser
+    proxy_manager = request.app.state.proxy_manager
+
+    if not browser:
+        raise HTTPException(status_code=503, detail="Playwright browser not available")
+
+    # Clean, deduplicate, validate
+    raw_asins = [a.strip().upper() for a in body.asins if a.strip()]
+    seen = set()
+    clean_asins = []
+    invalid_asins = []
+
+    for asin in raw_asins:
+        if asin in seen:
+            continue
+        seen.add(asin)
+        if _validate_asin(asin):
+            clean_asins.append(asin)
+        else:
+            invalid_asins.append(asin)
+
+    if not clean_asins and not invalid_asins:
+        raise HTTPException(status_code=400, detail="No ASINs provided")
+
+    total = len(clean_asins) + len(invalid_asins)
+    sem = asyncio.Semaphore(SCRAPE_CONCURRENCY)
+    queue: asyncio.Queue = asyncio.Queue()
+
+    # Push invalid ASINs as immediate errors
+    for asin in invalid_asins:
+        await queue.put({
+            "asin": asin,
+            "price": "",
+            "rating": None,
+            "rating_count": None,
+            "status": "invalid_format",
+            "url": "",
+            "checked_at": "",
+        })
+
+    async def worker(asin: str) -> None:
+        async with sem:
+            result = await scrape_amazon(asin, browser, proxy_manager)
+            await queue.put(result)
+
+    async def event_stream():
+        tasks = [asyncio.create_task(worker(a)) for a in clean_asins]
+        done = len(invalid_asins)  # invalid ones are already queued
+
+        # Yield invalid results immediately
+        for _ in range(len(invalid_asins)):
+            result = await queue.get()
+            done_count = _ + 1
+            payload = json.dumps({**result, "progress": done_count, "total": total})
+            yield f"data: {payload}\n\n"
+
+        # Yield scraped results as they complete
+        scraped_done = 0
+        while scraped_done < len(clean_asins):
+            result = await queue.get()
+            scraped_done += 1
+            progress = len(invalid_asins) + scraped_done
+            payload = json.dumps({**result, "progress": progress, "total": total})
             yield f"data: {payload}\n\n"
 
         await asyncio.gather(*tasks, return_exceptions=True)

@@ -4,8 +4,10 @@ FastAPI Price Checker — Amazon.in & Flipkart.in scraper service.
 No database, no auth — pure request → scrape → return JSON.
 """
 
+import asyncio
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 
@@ -16,11 +18,20 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from proxy.manager import ProxyManager
-from routes.price import router as price_router
-from routes.sheets import router as sheets_router
-from routes.manual import router as manual_router
+from amazon.routes import price_router as amazon_price_router
+from amazon.routes import sheets_router as amazon_sheets_router
+from amazon.routes import manual_router as amazon_manual_router
+from flipkart.routes import router as flipkart_price_router
 from scheduler import setup_scheduler
-from schemas.price import HealthResponse
+from schemas.price import (
+    AmazonResponse,
+    BothRequest,
+    BothResponse,
+    FlipkartResponse,
+    HealthResponse,
+)
+from amazon.scraper import scrape_amazon
+from flipkart.scraper import scrape_flipkart
 
 load_dotenv()
 
@@ -161,9 +172,10 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 # ── Routes ──────────────────────────────────────────────────────────────────
 
-app.include_router(price_router)
-app.include_router(sheets_router)
-app.include_router(manual_router)
+app.include_router(amazon_price_router)
+app.include_router(amazon_sheets_router)
+app.include_router(amazon_manual_router)
+app.include_router(flipkart_price_router)
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -178,9 +190,99 @@ async def health_check():
     )
 
 
+# ── Cross-platform comparison endpoint ──────────────────────────────────────
+
+@app.post("/price/both", response_model=BothResponse, tags=["Price"])
+async def check_both_prices(body: BothRequest, request: Request):
+    """Scrape both Amazon.in and Flipkart.in in parallel."""
+    proxy_manager = request.app.state.proxy_manager
+    browser = request.app.state.playwright_browser
+
+    # Run both scrapers in parallel
+    amazon_task = scrape_amazon(body.asin, browser, proxy_manager)
+    flipkart_task = scrape_flipkart(body.fsn, browser, proxy_manager)
+
+    amazon_result, flipkart_result = await asyncio.gather(amazon_task, flipkart_task)
+
+    # Calculate price difference
+    price_diff, cheaper_on = _calculate_price_diff(
+        amazon_result.get("price", ""),
+        flipkart_result.get("price", ""),
+    )
+
+    amazon_resp = AmazonResponse(
+        asin=amazon_result["asin"],
+        price=amazon_result.get("price", ""),
+        mrp=amazon_result.get("mrp"),
+        rating=amazon_result.get("rating"),
+        rating_count=amazon_result.get("rating_count"),
+        rank_raw=amazon_result.get("rank_raw"),
+        rank_value=amazon_result.get("rank_value"),
+        rank_category=amazon_result.get("rank_category"),
+        parent_node=amazon_result.get("parent_node"),
+        child_node=amazon_result.get("child_node"),
+        category_path=amazon_result.get("category_path"),
+        status=amazon_result["status"],
+        url=amazon_result["url"],
+        checked_at=amazon_result["checked_at"],
+    )
+
+    flipkart_resp = FlipkartResponse(
+        fsn=flipkart_result["fsn"],
+        price=flipkart_result.get("price", ""),
+        mrp=flipkart_result.get("mrp"),
+        discount=flipkart_result.get("discount"),
+        rating=flipkart_result.get("rating"),
+        rating_count=flipkart_result.get("rating_count"),
+        status=flipkart_result["status"],
+        url=flipkart_result["url"],
+        resolved_url=flipkart_result.get("resolved_url"),
+        checked_at=flipkart_result["checked_at"],
+    )
+
+    return BothResponse(
+        asin=body.asin,
+        fsn=body.fsn,
+        amazon=amazon_resp,
+        flipkart=flipkart_resp,
+        price_diff=price_diff,
+        cheaper_on=cheaper_on,
+    )
+
+
+def _parse_price_to_float(price_str: str) -> float | None:
+    """Extract numeric value from price string like '₹8,999'."""
+    if not price_str:
+        return None
+    cleaned = re.sub(r"[₹,\s]", "", price_str)
+    try:
+        return float(cleaned)
+    except (ValueError, TypeError):
+        return None
+
+
+def _calculate_price_diff(amazon_price: str, flipkart_price: str) -> tuple[str | None, str | None]:
+    """Calculate price difference and determine cheaper platform."""
+    a_val = _parse_price_to_float(amazon_price)
+    f_val = _parse_price_to_float(flipkart_price)
+
+    if a_val is None or f_val is None:
+        return None, None
+
+    diff = abs(a_val - f_val)
+    diff_str = f"₹{diff:,.0f}"
+
+    if a_val < f_val:
+        return diff_str, "amazon"
+    elif f_val < a_val:
+        return diff_str, "flipkart"
+    else:
+        return "₹0", "same"
+
+
 # ── Static Frontend ──────────────────────────────────────────────────────────
 
-frontend_dist = os.path.join(os.path.dirname(__file__), "frontend", "out")
+frontend_dist = os.path.join(os.path.dirname(__file__), "..", "frontend", "out")
 if os.path.exists(frontend_dist):
     app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
 else:

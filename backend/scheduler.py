@@ -8,7 +8,7 @@ from datetime import datetime, timezone, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from utils.scrape_helpers import CHUNK_SIZE, SCRAPE_CONCURRENCY, format_update as _format_update
-from scrapers.amazon import scrape_amazon
+from amazon.scraper import scrape_amazon
 from utils.google_sheets import GoogleSheetsClient
 from utils import run_logger
 
