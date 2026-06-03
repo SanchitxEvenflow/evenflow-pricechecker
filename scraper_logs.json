@@ -1,5 +1,38 @@
 [
   {
+    "run_id": "6c6953c2",
+    "type": "manual",
+    "triggered_at": "2026-06-03T11:00:00.399908+05:30",
+    "completed_at": "2026-06-03T11:19:18.811494+05:30",
+    "total_asins": 779,
+    "success_count": 777,
+    "failed_count": 2,
+    "sheet_tab": "Manual_Trigger_2026-06-03_11-00",
+    "status": "completed"
+  },
+  {
+    "run_id": "31bffda4",
+    "type": "automatic",
+    "triggered_at": "2026-06-02T23:00:01.511971+05:30",
+    "completed_at": "2026-06-02T23:18:23.560091+05:30",
+    "total_asins": 779,
+    "success_count": 766,
+    "failed_count": 13,
+    "sheet_tab": "Run_2026-06-02_23-00",
+    "status": "completed"
+  },
+  {
+    "run_id": "e93db974",
+    "type": "automatic",
+    "triggered_at": "2026-06-02T22:00:01.678124+05:30",
+    "completed_at": "2026-06-02T22:14:58.249215+05:30",
+    "total_asins": 779,
+    "success_count": 758,
+    "failed_count": 21,
+    "sheet_tab": "Run_2026-06-02_22-00",
+    "status": "completed"
+  },
+  {
     "run_id": "bd15e777",
     "type": "automatic",
     "triggered_at": "2026-06-02T21:00:01.435643+05:30",
