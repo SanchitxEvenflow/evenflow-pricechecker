@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import random
 from datetime import datetime, timezone, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -175,15 +176,13 @@ async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str) -> None:
     now = datetime.now(IST)
     new_tab = f"{tab_prefix}_{now.strftime('%Y-%m-%d_%H-%M')}"
     pids = [r["asin"] for r in source_rows]  # get_asins_with_rows uses "asin" key
-    total_combinations = len(pids) * len(LOCATIONS)
 
-    run_id = run_logger.create_log(run_type, total_combinations)
+    run_id = run_logger.create_log(run_type, len(pids))
 
     try:
         sheets_client.create_tab(sheet_id, new_tab)
         sheets_client.write_blinkit_header_and_pids(sheet_id, new_tab, pids)
-        logger.info("Blinkit: created tab '%s' with %d PIDs (%d total combinations)",
-                    new_tab, len(pids), total_combinations)
+        logger.info("Blinkit: created tab '%s' with %d PIDs", new_tab, len(pids))
     except Exception as e:
         logger.exception("Blinkit: failed to create result tab '%s'", new_tab)
         app.state.blinkit_cron_status.update({"is_running": False, "error": f"Failed to create tab '{new_tab}'"})
@@ -195,7 +194,7 @@ async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str) -> None:
         "last_run_at": run_start.isoformat(),
         "last_run_tab": new_tab,
         "progress": 0,
-        "total": total_combinations,
+        "total": len(pids),
         "last_run_duration_seconds": None,
         "last_run_processed": None,
         "error": None,
@@ -226,61 +225,63 @@ async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str) -> None:
                 proxy_manager.report_success(proxy)
             return result
 
-    # Build all work items: pid × city
-    work_items = [(pid, loc) for pid in pids for loc in LOCATIONS]
-    tasks = [scrape_one_city(pid, loc) for pid, loc in work_items]
-
-    # Gather all results while tracking progress
-    results_by_pid: dict[str, dict] = {pid: {} for pid in pids}
+    # Process one PID at a time — all 10 cities in parallel, then delay before next PID.
+    # This matches the SSE endpoint behaviour (which works) and avoids triggering rate limits
+    # that occur when all PID×city combinations are launched at once.
     total_done = 0
     total_success = 0
     total_failed = 0
 
-    for coro in asyncio.as_completed(tasks):
-        result = await coro
-        pid = result.get("product_id", "")
-        city = result.get("city", "")
-        if pid and city:
-            results_by_pid[pid][city] = result
+    for i, pid in enumerate(pids):
+        pid_tasks = [scrape_one_city(pid, loc) for loc in LOCATIONS]
+        city_results = await asyncio.gather(*pid_tasks, return_exceptions=True)
+
+        results_by_city: dict = {}
+        for result in city_results:
+            if isinstance(result, Exception):
+                total_failed += 1
+                continue
+            city = result.get("city", "")
+            if city:
+                results_by_city[city] = result
+            status = result.get("status", "error")
+            if status == "error":
+                total_failed += 1
+            else:
+                total_success += 1
 
         total_done += 1
-        status = result.get("status", "error")
-        if status in ("error",):
-            total_failed += 1
-        else:
-            total_success += 1
-
         app.state.blinkit_cron_status["progress"] = total_done
-        if total_done % 10 == 0 or total_done == total_combinations:
-            run_logger.update_progress(run_id, total_success, total_failed)
+        run_logger.update_progress(run_id, total_success, total_failed)
 
-    logger.info("Blinkit: all %d combinations scraped — writing to sheet", total_combinations)
+        try:
+            sheets_client.batch_update_blinkit_rows(sheet_id, new_tab, [{
+                "row": i + 2,
+                "values": format_blinkit_row(results_by_city),
+            }])
+            logger.info("Blinkit: wrote row for PID %s (%d/%d)", pid, total_done, len(pids))
+        except Exception:
+            logger.exception("Blinkit: failed to write row for PID %s", pid)
 
-    # Write all rows to sheet: row 2 = pids[0], row 3 = pids[1], ...
-    sheet_updates = []
-    for i, pid in enumerate(pids):
-        city_results = results_by_pid.get(pid, {})
-        sheet_updates.append({
-            "row": i + 2,
-            "values": format_blinkit_row(city_results),
-        })
+        if i < len(pids) - 1:
+            delay = random.uniform(
+                float(os.getenv("BLINKIT_DELAY_MIN", "1.0")),
+                float(os.getenv("BLINKIT_DELAY_MAX", "3.0")),
+            )
+            await asyncio.sleep(delay)
 
-    try:
-        sheets_client.batch_update_blinkit_rows(sheet_id, new_tab, sheet_updates)
-        logger.info("Blinkit: wrote %d rows to tab '%s'", len(sheet_updates), new_tab)
-    except Exception:
-        logger.exception("Blinkit: sheet write failed")
+    logger.info("Blinkit: all %d PIDs processed — tab '%s'", len(pids), new_tab)
 
     elapsed = datetime.now(IST) - run_start
     minutes, seconds = divmod(int(elapsed.total_seconds()), 60)
-    logger.info("Blinkit: run complete — %d PIDs, %d cities each | tab '%s' | time: %dm %ds",
+    logger.info("Blinkit: run complete — %d PIDs × %d cities | tab '%s' | time: %dm %ds",
                 len(pids), len(LOCATIONS), new_tab, minutes, seconds)
 
     app.state.blinkit_cron_status.update({
         "is_running": False,
         "last_run_duration_seconds": int(elapsed.total_seconds()),
-        "last_run_processed": total_done,
-        "progress": total_done,
+        "last_run_processed": len(pids),
+        "progress": len(pids),
     })
 
     run_logger.complete_log(run_id, total_success, total_failed, new_tab)

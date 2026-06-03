@@ -80,15 +80,15 @@ function Header({ dark, setDark, t, page }: { dark: boolean; setDark: (v: boolea
           <h1 className="text-xl font-bold tracking-tight text-neutral-100">Price Scraper</h1>
         </a>
         <div className="flex items-center gap-3">
-          {page === "home" ? (
-            <a href="#/scheduler" className="px-4 py-2 rounded-xl text-sm font-medium bg-[#FF9900] hover:bg-[#e88a00] text-black transition-all">
-              Run Scheduler
-            </a>
-          ) : (
-            <a href="#/" className="px-4 py-2 rounded-xl text-sm font-medium bg-neutral-800 hover:bg-neutral-700 text-white transition-all">
-              ← Back
-            </a>
-          )}
+          <a href="#/" className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${page === "home" ? "bg-[#FF9900] text-black" : "bg-neutral-800 hover:bg-neutral-700 text-white"}`}>
+            Amazon
+          </a>
+          <a href="#/blinkit" className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${page === "blinkit" ? "bg-[#F8CB46] text-black" : "bg-neutral-800 hover:bg-neutral-700 text-white"}`}>
+            Blinkit
+          </a>
+          <a href="#/scheduler" className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${page === "scheduler" ? "bg-[#FF9900] text-black" : "bg-neutral-800 hover:bg-neutral-700 text-white"}`}>
+            Scheduler
+          </a>
           <button onClick={() => setDark(!dark)} className="p-2 rounded-full border border-neutral-800 hover:opacity-80 transition-opacity" aria-label="Toggle Theme">
             {dark ? (
               <svg className="w-5 h-5 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
@@ -330,7 +330,9 @@ function HomePage({ t, dark }: { t: any; dark: boolean }) {
 // ═══════════════════════════════════════════════════════════════════════════
 function SchedulerPage({ t, dark }: { t: any; dark: boolean }) {
   const [cronStatus, setCronStatus] = useState<CronStatus | null>(null);
+  const [blinkitStatus, setBlinkitStatus] = useState<CronStatus | null>(null);
   const [isTriggering, setIsTriggering] = useState(false);
+  const [isBlinkitTriggering, setIsBlinkitTriggering] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [toast, setToast] = useState<{ type: string; msg: string } | null>(null);
 
@@ -349,12 +351,20 @@ function SchedulerPage({ t, dark }: { t: any; dark: boolean }) {
     } catch {}
   }, []);
 
+  const fetchBlinkitCron = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/price/blinkit/cron-status`);
+      if (res.ok) setBlinkitStatus(await res.json());
+    } catch {}
+  }, []);
+
   useEffect(() => {
-    fetchCron(); fetchLogs();
+    fetchCron(); fetchBlinkitCron(); fetchLogs();
     const i1 = setInterval(fetchCron, 10000);
     const i2 = setInterval(fetchLogs, 30000);
-    return () => { clearInterval(i1); clearInterval(i2); };
-  }, [fetchCron, fetchLogs]);
+    const i3 = setInterval(fetchBlinkitCron, 10000);
+    return () => { clearInterval(i1); clearInterval(i2); clearInterval(i3); };
+  }, [fetchCron, fetchBlinkitCron, fetchLogs]);
 
   const handleTrigger = async () => {
     setIsTriggering(true);
@@ -362,7 +372,7 @@ function SchedulerPage({ t, dark }: { t: any; dark: boolean }) {
     try {
       const res = await fetch(`${API}/sheets/api/trigger-manual-scheduler`, { method: "POST" });
       if (res.ok) {
-        setToast({ type: "success", msg: "Manual scrape triggered! Check progress below." });
+        setToast({ type: "success", msg: "Amazon manual scrape triggered! Check progress below." });
         setTimeout(fetchLogs, 2000);
       } else {
         const data = await res.json();
@@ -372,6 +382,25 @@ function SchedulerPage({ t, dark }: { t: any; dark: boolean }) {
       setToast({ type: "error", msg: e.message });
     } finally {
       setIsTriggering(false);
+    }
+  };
+
+  const handleBlinkitTrigger = async () => {
+    setIsBlinkitTriggering(true);
+    setToast(null);
+    try {
+      const res = await fetch(`${API}/sheets/api/trigger-manual-blinkit`, { method: "POST" });
+      if (res.ok) {
+        setToast({ type: "success", msg: "Blinkit manual scrape triggered! Check progress below." });
+        setTimeout(fetchLogs, 2000);
+      } else {
+        const data = await res.json();
+        setToast({ type: "error", msg: data.detail || "Failed to trigger Blinkit scrape" });
+      }
+    } catch (e: any) {
+      setToast({ type: "error", msg: e.message });
+    } finally {
+      setIsBlinkitTriggering(false);
     }
   };
 
@@ -387,11 +416,11 @@ function SchedulerPage({ t, dark }: { t: any; dark: boolean }) {
         </div>
       )}
 
-      {/* Manual Trigger Card */}
+      {/* Amazon Manual Trigger Card */}
       <div className={`${t.card} border ${t.border} rounded-2xl p-8 shadow-sm`}>
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
-            <h2 className="text-2xl font-bold">Manual Trigger</h2>
+            <h2 className="text-2xl font-bold"><span className="text-[#FF9900]">amazon</span> — Manual Trigger</h2>
             <p className={`mt-1 text-sm ${t.muted}`}>Run a full scrape of all ASINs from the Google Sheet. Results are written to a new tab: <code className={`text-xs px-1.5 py-0.5 rounded ${dark ? "bg-neutral-800" : "bg-neutral-100"}`}>Manual_Trigger_YYYY-MM-DD_HH-MM</code></p>
           </div>
           <button
@@ -412,6 +441,36 @@ function SchedulerPage({ t, dark }: { t: any; dark: boolean }) {
             </div>
             <div className={`h-2.5 rounded-full overflow-hidden ${dark ? "bg-neutral-800" : "bg-neutral-200"}`}>
               <div className="h-full bg-[#FF9900] rounded-full transition-all duration-500" style={{ width: `${Math.round((cronStatus.progress / cronStatus.total) * 100)}%` }} />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Blinkit Manual Trigger Card */}
+      <div className={`${t.card} border ${t.border} rounded-2xl p-8 shadow-sm`}>
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <h2 className="text-2xl font-bold"><span className="text-[#F8CB46]">blinkit</span> — Manual Trigger</h2>
+            <p className={`mt-1 text-sm ${t.muted}`}>Run a full scrape of all PIDs from the Blinkit Google Sheet across all 10 cities. Results are written to a new tab: <code className={`text-xs px-1.5 py-0.5 rounded ${dark ? "bg-neutral-800" : "bg-neutral-100"}`}>Blinkit_Manual_YYYY-MM-DD_HH-MM</code></p>
+          </div>
+          <button
+            onClick={handleBlinkitTrigger}
+            disabled={isBlinkitTriggering || blinkitStatus?.is_running === true}
+            className="bg-[#F8CB46] hover:bg-[#e5b93d] text-black px-8 py-3 rounded-xl font-medium text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shrink-0"
+          >
+            {isBlinkitTriggering ? <><Spin /> Starting...</> : blinkitStatus?.is_running ? "Scrape Running..." : "Manual Trigger"}
+          </button>
+        </div>
+
+        {/* Blinkit Progress */}
+        {blinkitStatus?.is_running && blinkitStatus.progress != null && blinkitStatus.total != null && blinkitStatus.total > 0 && (
+          <div className="mt-6">
+            <div className="flex justify-between text-xs mb-2">
+              <span className={t.muted}>Progress</span>
+              <span className="text-blue-500 font-medium">{blinkitStatus.progress} / {blinkitStatus.total}</span>
+            </div>
+            <div className={`h-2.5 rounded-full overflow-hidden ${dark ? "bg-neutral-800" : "bg-neutral-200"}`}>
+              <div className="h-full bg-[#F8CB46] rounded-full transition-all duration-500" style={{ width: `${Math.round((blinkitStatus.progress / blinkitStatus.total) * 100)}%` }} />
             </div>
           </div>
         )}
@@ -454,8 +513,12 @@ function SchedulerPage({ t, dark }: { t: any; dark: boolean }) {
               ) : logs.map(log => (
                 <tr key={log.run_id} className="transition-colors">
                   <td className="px-6 py-3 whitespace-nowrap text-sm">
-                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${log.type === "manual" ? "bg-purple-500/10 text-purple-500" : "bg-blue-500/10 text-blue-500"}`}>
-                      {log.type === "manual" ? "Manual" : "Auto"}
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${
+                      log.type === "manual" ? "bg-purple-500/10 text-purple-500" :
+                      log.type === "blinkit_manual" ? "bg-yellow-500/10 text-yellow-500" :
+                      "bg-blue-500/10 text-blue-500"
+                    }`}>
+                      {log.type === "manual" ? "Amazon" : log.type === "blinkit_manual" ? "Blinkit" : "Auto"}
                     </span>
                   </td>
                   <td className={`px-6 py-3 whitespace-nowrap text-sm ${t.muted}`}>{fmtDate(log.triggered_at)}</td>
@@ -475,6 +538,191 @@ function SchedulerPage({ t, dark }: { t: any; dark: boolean }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// BLINKIT PAGE
+// ═══════════════════════════════════════════════════════════════════════════
+const BLINKIT_CITIES = ["Bangalore","NCR","Mumbai","Hyderabad","Kolkata","Pune","Ahmedabad","Chennai","Patna","Dehradun"];
+
+interface BlinkitResult { product_id: string; city: string; title?: string|null; price?: number|null; mrp?: number|null; status: string; is_sold_out?: boolean; url?: string; checked_at?: string; }
+
+function BlinkitPage({ t, dark }: { t: any; dark: boolean }) {
+  const [idText, setIdText] = useState("");
+  const [results, setResults] = useState<Record<string, Record<string, BlinkitResult>>>({});
+  const [isScraping, setIsScraping] = useState(false);
+  const [error, setError] = useState("");
+  const [stats, setStats] = useState({ total: 0, done: 0, success: 0, failed: 0 });
+
+  const parseIds = (text: string) => [...new Set(text.split(/[\n,]+/).map(a => a.trim()).filter(Boolean))];
+
+  const handleScrape = async () => {
+    const ids = parseIds(idText);
+    if (!ids.length) { setError("Enter at least one product ID"); return; }
+    setError(""); setIsScraping(true);
+    setResults({}); setStats({ total: ids.length * BLINKIT_CITIES.length, done: 0, success: 0, failed: 0 });
+
+    try {
+      const res = await fetch(`${API}/price/blinkit/all-cities`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ product_ids: ids }),
+      });
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No stream");
+      const decoder = new TextDecoder();
+      let buffer = "", suc = 0, fail = 0;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n"); buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const d = JSON.parse(line.slice(6));
+          if (d.done) continue;
+          if (d.status === "error") fail++; else suc++;
+          setResults(prev => {
+            const next = { ...prev };
+            if (!next[d.product_id]) next[d.product_id] = {};
+            next[d.product_id] = { ...next[d.product_id], [d.city]: d };
+            return next;
+          });
+          setStats({ total: ids.length * BLINKIT_CITIES.length, done: suc + fail, success: suc, failed: fail });
+        }
+      }
+    } catch (e: any) { setError("Scrape failed: " + e.message); }
+    finally { setIsScraping(false); }
+  };
+
+  const downloadCSV = () => {
+    const pids = Object.keys(results);
+    if (!pids.length) return;
+    const hdr = ["Product ID", ...BLINKIT_CITIES.flatMap(c => [`${c} Price`, `${c} MRP`, `${c} Status`])];
+    const rows = pids.map(pid => {
+      const cells = [pid];
+      BLINKIT_CITIES.forEach(c => {
+        const r = results[pid]?.[c];
+        cells.push(r?.price != null ? String(r.price) : "", r?.mrp != null ? String(r.mrp) : "", r?.status || "");
+      });
+      return cells.map(f => `"${String(f).replace(/"/g, '""')}"`).join(",");
+    });
+    const blob = new Blob([[hdr.join(","), ...rows].join("\n")], { type: "text/csv" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+    a.download = `blinkit_${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  };
+
+  const statusColor = (s: string) => {
+    if (s === "available") return "bg-green-500/15 text-green-400 border-green-500/30";
+    if (s === "out_of_stock") return "bg-red-500/15 text-red-400 border-red-500/30";
+    if (s === "unserviceable") return "bg-neutral-500/15 text-neutral-400 border-neutral-500/30";
+    return "bg-yellow-500/15 text-yellow-400 border-yellow-500/30";
+  };
+
+  const pids = Object.keys(results);
+
+  return (
+    <main className="max-w-[95vw] mx-auto px-6 py-8 space-y-8">
+      {error && (
+        <div className="p-4 bg-red-500/10 border border-red-500/30 text-red-500 rounded-xl text-sm font-medium flex items-center">
+          <svg className="w-5 h-5 mr-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          {error}
+        </div>
+      )}
+
+      <div className={`${t.card} border ${t.border} rounded-2xl p-8 shadow-sm`}>
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-2xl font-bold"><span className="text-[#F8CB46]">blinkit</span> — All Cities Scrape</h2>
+            <p className={`mt-1 text-sm ${t.muted}`}>Paste Blinkit product IDs (one per line). Scrapes all 10 cities concurrently.</p>
+          </div>
+        </div>
+        <textarea value={idText} onChange={e => setIdText(e.target.value)} placeholder={"12345\n67890"} rows={4}
+          className={`w-full rounded-xl px-4 py-3 text-sm font-mono border focus:outline-none focus:ring-2 focus:ring-[#F8CB46]/50 resize-y ${t.input}`} disabled={isScraping} />
+        <div className="flex items-center justify-between mt-4">
+          <p className={`text-xs ${t.muted}`}>{parseIds(idText).length} product ID(s) × 10 cities = {parseIds(idText).length * 10} requests</p>
+          <button onClick={handleScrape} disabled={isScraping || !parseIds(idText).length}
+            className="bg-[#F8CB46] hover:bg-[#e5b93d] text-black px-6 py-3 rounded-xl font-medium text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2">
+            {isScraping ? <><Spin /> Scraping...</> : "Scrape All Cities"}
+          </button>
+        </div>
+      </div>
+
+      {stats.total > 0 && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {[
+            { label: "Total", value: stats.total, color: "" },
+            { label: "Done", value: stats.done, color: "" },
+            { label: "Success", value: stats.success, color: "text-green-500" },
+            { label: "Failed", value: stats.failed, color: "text-red-500" },
+          ].map(s => (
+            <div key={s.label} className={`${t.card} border ${t.border} rounded-2xl p-5 shadow-sm`}>
+              <p className={`text-xs ${t.muted} font-semibold uppercase tracking-wider`}>{s.label}</p>
+              <p className={`text-3xl font-bold mt-1 ${s.color}`}>{s.value}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {isScraping && stats.total > 0 && (
+        <div className={`${t.card} border ${t.border} rounded-2xl p-5 shadow-sm`}>
+          <div className="flex justify-between text-xs mb-2">
+            <span className={t.muted}>Progress</span>
+            <span className="text-blue-500 font-medium">{stats.done} / {stats.total}</span>
+          </div>
+          <div className={`h-2 rounded-full overflow-hidden ${dark ? "bg-neutral-800" : "bg-neutral-200"}`}>
+            <div className="h-full bg-[#F8CB46] rounded-full transition-all duration-300" style={{ width: `${Math.round((stats.done / stats.total) * 100)}%` }} />
+          </div>
+        </div>
+      )}
+
+      {pids.length > 0 && (
+        <div className={`${t.card} border ${t.border} rounded-2xl overflow-hidden shadow-sm`}>
+          <div className={`flex items-center justify-between px-6 py-4 border-b ${t.border}`}>
+            <p className={`text-xs font-semibold uppercase tracking-wider ${t.muted}`}>Results — {BLINKIT_CITIES.length} Cities</p>
+            <button onClick={downloadCSV} className={`px-3 py-1.5 rounded-lg text-xs font-medium ${t.btnSecondary} transition-all flex items-center gap-2`}>
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+              Download CSV
+            </button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className={`border-b ${t.border} ${t.thead}`}>
+                  <th className={`px-4 py-4 text-xs font-semibold ${t.muted} uppercase tracking-wider sticky left-0 ${t.card} z-10`}>Product ID</th>
+                  {BLINKIT_CITIES.map(c => (
+                    <th key={c} className={`px-4 py-4 text-xs font-semibold ${t.muted} uppercase tracking-wider text-center`}>{c}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className={`divide-y ${t.border}`}>
+                {pids.map(pid => (
+                  <tr key={pid} className="transition-colors">
+                    <td className={`px-4 py-3 whitespace-nowrap text-sm font-medium font-mono sticky left-0 ${t.card} z-10`}>{pid}</td>
+                    {BLINKIT_CITIES.map(city => {
+                      const r = results[pid]?.[city];
+                      if (!r) return <td key={city} className={`px-4 py-3 text-center text-xs ${t.muted}`}>—</td>;
+                      return (
+                        <td key={city} className="px-3 py-3 text-center">
+                          <span className={`inline-block px-2 py-1 rounded-lg text-xs font-semibold border ${statusColor(r.status)}`}>
+                            {r.price != null ? `₹${r.price}` : r.status.replace("_", " ")}
+                          </span>
+                          {r.mrp != null && r.price != null && r.mrp > r.price && (
+                            <p className={`text-[10px] mt-0.5 line-through ${t.muted}`}>₹{r.mrp}</p>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </main>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // ROOT — Hash Router
 // ═══════════════════════════════════════════════════════════════════════════
 export default function App() {
@@ -482,7 +730,12 @@ export default function App() {
   const [page, setPage] = useState("home");
 
   useEffect(() => {
-    const onHash = () => setPage(window.location.hash === "#/scheduler" ? "scheduler" : "home");
+    const onHash = () => {
+      const h = window.location.hash;
+      if (h === "#/scheduler") setPage("scheduler");
+      else if (h === "#/blinkit") setPage("blinkit");
+      else setPage("home");
+    };
     onHash();
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
@@ -491,7 +744,7 @@ export default function App() {
   return (
     <div className={`min-h-screen transition-colors duration-300 font-sans ${t.bg} ${t.text}`}>
       <Header dark={dark} setDark={setDark} t={t} page={page} />
-      {page === "scheduler" ? <SchedulerPage t={t} dark={dark} /> : <HomePage t={t} dark={dark} />}
+      {page === "scheduler" ? <SchedulerPage t={t} dark={dark} /> : page === "blinkit" ? <BlinkitPage t={t} dark={dark} /> : <HomePage t={t} dark={dark} />}
     </div>
   );
 }

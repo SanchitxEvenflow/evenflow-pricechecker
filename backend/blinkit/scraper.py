@@ -298,6 +298,7 @@ def fetch_blinkit_data(
         # Non-200 handling
         if response.status_code != 200:
             logger.error("Blinkit API returned status %d for item_id=%s", response.status_code, item_id)
+            _clear_thread_session()
 
             if response.status_code in (401, 403):
                 logger.error("BLOCKED: Get a new BLINKIT_DEVICE_ID or rotate proxies")
