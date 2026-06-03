@@ -1,5 +1,16 @@
 [
   {
+    "run_id": "2327ace2",
+    "type": "automatic",
+    "triggered_at": "2026-06-03T15:00:01.685105+05:30",
+    "completed_at": null,
+    "total_asins": 779,
+    "success_count": 0,
+    "failed_count": 0,
+    "sheet_tab": null,
+    "status": "in_progress"
+  },
+  {
     "run_id": "6c6953c2",
     "type": "manual",
     "triggered_at": "2026-06-03T11:00:00.399908+05:30",

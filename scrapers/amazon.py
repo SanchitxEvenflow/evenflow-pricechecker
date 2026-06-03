@@ -234,7 +234,10 @@ def _detect_status(soup: BeautifulSoup, response_text: str, asin: str, page_url:
     if availability_el:
         avail_text = availability_el.get_text(strip=True).lower()
         if "currently unavailable" in avail_text or "out of stock" in avail_text:
-            return "unavailable"
+            # Only mark unavailable if no price is visible — product may still be listed
+            has_price = any(soup.select_one(sel) for sel in PRICE_SELECTORS)
+            if not has_price:
+                return "unavailable"
 
     canonical = soup.select_one('link[rel="canonical"]')
     if canonical and canonical.get("href"):
@@ -317,48 +320,16 @@ async def _save_debug(page, asin: str, attempt: int) -> None:
         logger.warning("Debug save failed: %s", e)
 
 
-def _fetch_bsr_curl_sync(asin: str, proxy_url: str | None) -> dict:
-    _empty = {
-        "rank_raw": None, "rank_value": None, "rank_category": None,
-        "sub_rank_value": None, "sub_rank_category": None,
-    }
-    url = f"https://www.amazon.in/dp/{asin}"
-    try:
-        proxies = {"https": proxy_url, "http": proxy_url} if proxy_url else None
-        resp = curl_requests.get(
-            url,
-            impersonate="chrome120",
-            proxies=proxies,
-            timeout=20,
-            headers={
-                "Accept-Language": "en-IN,en;q=0.9",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            },
-        )
-        if resp.status_code != 200:
-            logger.warning("BSR curl fallback: HTTP %d for ASIN %s", resp.status_code, asin)
-            return _empty
-        soup = BeautifulSoup(resp.text, "html.parser")
-        result = _extract_best_seller_rank(soup)
-        logger.info("BSR curl fallback for %s: rank_value=%s rank_category=%s",
-                    asin, result["rank_value"], result["rank_category"])
-        return result
-    except Exception as e:
-        logger.warning("BSR curl fallback error for ASIN %s: %s", asin, e)
-        return _empty
 
-
-async def _fetch_bsr_curl(asin: str, proxy_url: str | None) -> dict:
-    return await asyncio.to_thread(_fetch_bsr_curl_sync, asin, proxy_url)
-
-
-def _fetch_rating_breakdown_curl_sync(asin: str) -> dict[str, str | None]:
-    """Fetch histogram via direct curl_cffi request.
+def _fetch_curl_data_sync(asin: str) -> dict:
+    """Single direct curl_cffi request to extract rating breakdown + BSR + category.
 
     Proxies return a bot-check page for curl traffic, so we go direct.
-    curl_cffi has no JS execution → Amazon serves a-no-js static HTML with the histogram table.
+    curl_cffi has no JS → Amazon serves a-no-js static HTML with histogram and product details.
     """
-    _empty = {"5_star": None, "4_star": None, "3_star": None, "2_star": None, "1_star": None}
+    _empty_breakdown = {"5_star": None, "4_star": None, "3_star": None, "2_star": None, "1_star": None}
+    _empty_rank = {"rank_raw": None, "rank_value": None, "rank_category": None, "sub_rank_value": None, "sub_rank_category": None}
+    _empty_category = {"parent_node": None, "child_node": None, "category_path": None}
     url = f"https://www.amazon.in/dp/{asin}"
     try:
         resp = curl_requests.get(
@@ -372,17 +343,22 @@ def _fetch_rating_breakdown_curl_sync(asin: str) -> dict[str, str | None]:
             },
         )
         if resp.status_code != 200:
-            logger.warning("Histogram curl: HTTP %d for ASIN %s", resp.status_code, asin)
-            return _empty
+            logger.warning("Curl data fetch: HTTP %d for ASIN %s", resp.status_code, asin)
+            return {**_empty_breakdown, **_empty_rank, **_empty_category}
         soup = BeautifulSoup(resp.text, "html.parser")
-        return _extract_rating_breakdown(soup)
+        breakdown = _extract_rating_breakdown(soup)
+        rank_info = _extract_best_seller_rank(soup)
+        category_info = _extract_category_hierarchy(soup)
+        logger.info("Curl data for %s: rank=%s/%s, breakdown_5star=%s",
+                    asin, rank_info["rank_value"], rank_info["rank_category"], breakdown.get("5_star"))
+        return {**breakdown, **rank_info, **category_info}
     except Exception as e:
-        logger.warning("Histogram curl error for ASIN %s: %s", asin, e)
-        return _empty
+        logger.warning("Curl data fetch error for ASIN %s: %s", asin, e)
+        return {**_empty_breakdown, **_empty_rank, **_empty_category}
 
 
-async def _fetch_rating_breakdown_curl(asin: str) -> dict[str, str | None]:
-    return await asyncio.to_thread(_fetch_rating_breakdown_curl_sync, asin)
+async def _fetch_curl_data(asin: str) -> dict:
+    return await asyncio.to_thread(_fetch_curl_data_sync, asin)
 
 
 async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager) -> dict:
@@ -475,15 +451,7 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
             mrp = _extract_text(soup, MRP_SELECTORS)
             rating = _extract_rating(soup)
             rating_count = _extract_rating_count(soup)
-            rating_breakdown = await _fetch_rating_breakdown_curl(asin)
-
-            # BSR / category extraction disabled — slow and unreliable; re-enable when ready
-            # rank_info = _extract_best_seller_rank(soup)
-            # logger.info("BSR raw from Playwright: %r", rank_info["rank_raw"])
-            # if not rank_info["rank_value"]:
-            #     logger.info("Playwright BSR empty — trying curl fallback for ASIN %s", asin)
-            #     rank_info = await _fetch_bsr_curl(asin, proxy)
-            # category_info = _extract_category_hierarchy(soup)
+            curl_data = await _fetch_curl_data(asin)
 
             buy_button = soup.select_one("#add-to-cart-button") or soup.select_one("#buy-now-button")
             final_status = "available" if (price and buy_button) else "price_found"
@@ -498,15 +466,15 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
                 "mrp": mrp,
                 "rating": rating,
                 "rating_count": rating_count,
-                "rating_breakdown": rating_breakdown,
-                "rank_raw": None,
-                "rank_value": None,
-                "rank_category": None,
-                "sub_rank_value": None,
-                "sub_rank_category": None,
-                "parent_node": None,
-                "child_node": None,
-                "category_path": None,
+                "rating_breakdown": {k: curl_data[k] for k in ("5_star", "4_star", "3_star", "2_star", "1_star")},
+                "rank_raw": curl_data["rank_raw"],
+                "rank_value": curl_data["rank_value"],
+                "rank_category": curl_data["rank_category"],
+                "sub_rank_value": curl_data["sub_rank_value"],
+                "sub_rank_category": curl_data["sub_rank_category"],
+                "parent_node": curl_data["parent_node"],
+                "child_node": curl_data["child_node"],
+                "category_path": curl_data["category_path"],
                 "status": final_status,
                 "platform": "amazon",
                 "url": url,
