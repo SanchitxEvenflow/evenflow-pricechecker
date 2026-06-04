@@ -10,10 +10,12 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from functools import partial
 
-from utils.scrape_helpers import CHUNK_SIZE, SCRAPE_CONCURRENCY, format_update as _format_update, BLINKIT_CITIES, format_blinkit_row
+from utils.scrape_helpers import CHUNK_SIZE, SCRAPE_CONCURRENCY, format_update as _format_update, BLINKIT_CITIES, format_blinkit_row, ZEPTO_CITIES, format_zepto_row
 from amazon.scraper import scrape_amazon
 from blinkit.scraper import fetch_blinkit_data
-from blinkit.locations import LOCATIONS
+from blinkit.locations import LOCATIONS as BLINKIT_LOCATIONS
+from zepto.scraper import fetch_zepto_data
+from zepto.locations import LOCATIONS as ZEPTO_LOCATIONS
 from utils.google_sheets import GoogleSheetsClient
 from utils import run_logger
 
@@ -233,7 +235,7 @@ async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str) -> None:
     total_failed = 0
 
     for i, pid in enumerate(pids):
-        pid_tasks = [scrape_one_city(pid, loc) for loc in LOCATIONS]
+        pid_tasks = [scrape_one_city(pid, loc) for loc in BLINKIT_LOCATIONS]
         city_results = await asyncio.gather(*pid_tasks, return_exceptions=True)
 
         results_by_city: dict = {}
@@ -275,7 +277,7 @@ async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str) -> None:
     elapsed = datetime.now(IST) - run_start
     minutes, seconds = divmod(int(elapsed.total_seconds()), 60)
     logger.info("Blinkit: run complete — %d PIDs × %d cities | tab '%s' | time: %dm %ds",
-                len(pids), len(LOCATIONS), new_tab, minutes, seconds)
+                len(pids), len(BLINKIT_LOCATIONS), new_tab, minutes, seconds)
 
     app.state.blinkit_cron_status.update({
         "is_running": False,
@@ -290,6 +292,145 @@ async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str) -> None:
 async def run_manual_blinkit_trigger(app) -> None:
     """Called when user manually triggers the Blinkit full scrape from the UI."""
     await _run_full_blinkit_scrape(app, tab_prefix="Blinkit_Manual", run_type="blinkit_manual")
+
+
+async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str) -> None:
+    """Core scrape logic for Zepto sheet-based runs.
+
+    Reads PIDs from ZEPTO_SHEET_ID / ZEPTO_SOURCE_TAB, scrapes all 10 cities
+    per PID, and writes a wide-format result tab.
+    """
+    sheets_client = GoogleSheetsClient()
+    sheet_id = os.getenv("ZEPTO_SHEET_ID", "")
+    source_tab = os.getenv("ZEPTO_SOURCE_TAB", "Sheet1")
+
+    if not sheet_id:
+        logger.error("Zepto: no sheet ID configured (set ZEPTO_SHEET_ID)")
+        return
+
+    run_start = datetime.now(IST)
+    logger.info("Zepto: starting %s scrape — sheet=%s source_tab=%s started_at=%s",
+                run_type, sheet_id, source_tab, run_start.strftime("%H:%M:%S"))
+
+    try:
+        source_rows = sheets_client.get_asins_with_rows(sheet_id, source_tab)
+    except Exception:
+        logger.exception("Zepto: failed to read PIDs from source tab")
+        return
+
+    if not source_rows:
+        logger.warning("Zepto: no PIDs found in source tab '%s' — skipping", source_tab)
+        return
+
+    now = datetime.now(IST)
+    new_tab = f"{tab_prefix}_{now.strftime('%Y-%m-%d_%H-%M')}"
+    pids = [r["asin"] for r in source_rows]  # get_asins_with_rows uses "asin" key
+
+    run_id = run_logger.create_log(run_type, len(pids))
+
+    try:
+        sheets_client.create_tab(sheet_id, new_tab)
+        sheets_client.write_zepto_header_and_pids(sheet_id, new_tab, pids)
+        logger.info("Zepto: created tab '%s' with %d PIDs", new_tab, len(pids))
+    except Exception as e:
+        logger.exception("Zepto: failed to create result tab '%s'", new_tab)
+        app.state.zepto_cron_status.update({"is_running": False, "error": f"Failed to create tab '{new_tab}'"})
+        run_logger.fail_log(run_id, f"Failed to create tab '{new_tab}': {e}")
+        return
+
+    app.state.zepto_cron_status.update({
+        "is_running": True,
+        "last_run_at": run_start.isoformat(),
+        "last_run_tab": new_tab,
+        "progress": 0,
+        "total": len(pids),
+        "last_run_duration_seconds": None,
+        "last_run_processed": None,
+        "error": None,
+    })
+
+    proxy_manager = app.state.proxy_manager
+    sem = asyncio.Semaphore(5)  # Rate limit aggressively
+    loop = asyncio.get_event_loop()
+
+    async def scrape_one_city(pid: str, loc: dict) -> dict:
+        async with sem:
+            result = await loop.run_in_executor(
+                None,
+                partial(
+                    fetch_zepto_data,
+                    item_id=pid,
+                    pincode=loc["pincode"],
+                    lat=loc["lat"],
+                    lon=loc["lng"],
+                    city=loc["name"],
+                    proxy_manager=proxy_manager,
+                ),
+            )
+            return result
+
+    total_done = 0
+    total_success = 0
+    total_failed = 0
+
+    for i, pid in enumerate(pids):
+        pid_tasks = [scrape_one_city(pid, loc) for loc in ZEPTO_LOCATIONS]
+        city_results = await asyncio.gather(*pid_tasks, return_exceptions=True)
+
+        results_by_city: dict = {}
+        for result in city_results:
+            if isinstance(result, Exception):
+                total_failed += 1
+                continue
+            city = result.get("city", "")
+            if city:
+                results_by_city[city] = result
+            status = result.get("status", "error")
+            if status == "error":
+                total_failed += 1
+            else:
+                total_success += 1
+
+        total_done += 1
+        app.state.zepto_cron_status["progress"] = total_done
+        run_logger.update_progress(run_id, total_success, total_failed)
+
+        try:
+            sheets_client.batch_update_zepto_rows(sheet_id, new_tab, [{
+                "row": i + 2,
+                "values": format_zepto_row(results_by_city),
+            }])
+            logger.info("Zepto: wrote row for PID %s (%d/%d)", pid, total_done, len(pids))
+        except Exception:
+            logger.exception("Zepto: failed to write row for PID %s", pid)
+
+        if i < len(pids) - 1:
+            delay = random.uniform(
+                float(os.getenv("ZEPTO_DELAY_MIN", "1.0")),
+                float(os.getenv("ZEPTO_DELAY_MAX", "3.0")),
+            )
+            await asyncio.sleep(delay)
+
+    logger.info("Zepto: all %d PIDs processed — tab '%s'", len(pids), new_tab)
+
+    elapsed = datetime.now(IST) - run_start
+    minutes, seconds = divmod(int(elapsed.total_seconds()), 60)
+    logger.info("Zepto: run complete — %d PIDs × %d cities | tab '%s' | time: %dm %ds",
+                len(pids), len(ZEPTO_LOCATIONS), new_tab, minutes, seconds)
+
+    app.state.zepto_cron_status.update({
+        "is_running": False,
+        "last_run_duration_seconds": int(elapsed.total_seconds()),
+        "last_run_processed": len(pids),
+        "progress": len(pids),
+    })
+
+    run_logger.complete_log(run_id, total_success, total_failed, new_tab)
+
+
+async def run_manual_zepto_trigger(app) -> None:
+    """Called when user manually triggers the Zepto full scrape from the UI."""
+    await _run_full_zepto_scrape(app, tab_prefix="Zepto_Manual", run_type="zepto_manual")
 
 
 def setup_scheduler(app) -> AsyncIOScheduler | None:
