@@ -81,3 +81,21 @@ def format_update(res: dict) -> dict:
             res.get("checked_at", ""),
         ],
     }
+
+
+def format_flipkart_update(res: dict) -> dict:
+    """Format a Flipkart scrape result into a sheet update dict (8 columns B–I)."""
+    return {
+        "row": res["row"],
+        "values": [
+            res.get("price", ""),
+            res.get("mrp", ""),
+            res.get("discount", ""),
+            res.get("rating", ""),
+            res.get("rating_count", ""),
+            res.get("fulfilled_by", ""),
+            res.get("status", "unknown"),
+            res.get("checked_at", ""),
+        ],
+    }
+

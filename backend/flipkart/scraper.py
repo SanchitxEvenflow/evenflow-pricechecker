@@ -68,7 +68,7 @@ def _cache_url(fsn: str, resolved_url: str) -> None:
 # This JS runs in the browser and returns all extractable product data at once
 JS_EXTRACT_ALL = """
 () => {
-    const result = { price: null, mrp: null, discount: null, rating: null, rating_count: null };
+    const result = { price: null, mrp: null, discount: null, rating: null, rating_count: null, fulfilled_by: null };
 
     // ── Strategy 1: JSON-LD structured data ──
     const ldScripts = document.querySelectorAll('script[type="application/ld+json"]');
@@ -98,7 +98,53 @@ JS_EXTRACT_ALL = """
         } catch(e) {}
     }
 
-    // ── Strategy 2: Visible DOM text extraction ──
+    // ── Strategy 2: Targeted CSS selectors (new Flipkart React layout) ──
+
+    // Price + MRP: div.css-g5y9jx price container
+    if (!result.price || !result.mrp) {
+        const container = document.querySelector('div.css-g5y9jx');
+        if (container) {
+            if (!result.price) {
+                for (const child of container.querySelectorAll('div')) {
+                    const s = child.getAttribute('style') || '';
+                    if (!s.includes('line-through')) {
+                        const text = child.textContent.trim();
+                        if (/^₹[\\d,]+$/.test(text)) { result.price = text; break; }
+                    }
+                }
+            }
+            if (!result.mrp) {
+                for (const child of container.querySelectorAll('div')) {
+                    const s = child.getAttribute('style') || '';
+                    if (s.includes('line-through')) {
+                        const digits = child.textContent.trim().replace(/[^\\d,]/g, '');
+                        if (digits) { result.mrp = '₹' + digits; break; }
+                    }
+                }
+            }
+        }
+    }
+
+    // Rating: div.css-146c3p1 with inter_bold font (rating badge)
+    if (!result.rating) {
+        for (const el of document.querySelectorAll('div.css-146c3p1')) {
+            const s = el.getAttribute('style') || '';
+            if (s.includes('inter_bold')) {
+                const val = parseFloat(el.textContent.trim());
+                if (val >= 1 && val <= 5) { result.rating = String(val); break; }
+            }
+        }
+    }
+
+    // Rating count: "based on N ratings by" text pattern
+    if (!result.rating_count) {
+        for (const el of document.querySelectorAll('div, span')) {
+            const m = el.textContent.trim().match(/based on ([\\d,]+)\\s*ratings?/i);
+            if (m) { result.rating_count = m[1]; break; }
+        }
+    }
+
+    // ── Strategy 3: Visible DOM text extraction ──
     // Price: look for ₹ symbol in likely price containers
     if (!result.price) {
         // Try all elements that contain ₹ and look like a price
@@ -120,7 +166,7 @@ JS_EXTRACT_ALL = """
         }
     }
 
-    // MRP: look for strikethrough prices
+    // MRP: look for strikethrough prices (Strategy 3 fallback)
     if (!result.mrp) {
         const strikeThroughs = document.querySelectorAll('s, [style*="line-through"], del');
         for (const el of strikeThroughs) {
@@ -165,6 +211,18 @@ JS_EXTRACT_ALL = """
             const match = text.match(/([\\d,]+)\\s*Ratings?/i);
             if (match) {
                 result.rating_count = match[1];
+                break;
+            }
+        }
+    }
+
+    // Fulfilled by: "Fulfilled by <seller>" text in product details
+    if (!result.fulfilled_by) {
+        for (const el of document.querySelectorAll('div, span')) {
+            const text = el.textContent.trim();
+            const m = text.match(/^Fulfilled by\s+(.+)$/i);
+            if (m && el.children.length === 0) {
+                result.fulfilled_by = m[1].trim();
                 break;
             }
         }
@@ -290,6 +348,7 @@ async def scrape_flipkart(fsn: str, browser: Browser, proxy_manager: ProxyManage
             discount = data.get("discount") if data else None
             rating = data.get("rating") if data else None
             rating_count = data.get("rating_count") if data else None
+            fulfilled_by = data.get("fulfilled_by") if data else None
 
             # ── Fallback: regex on visible body text ────────────────────
             if not price:
@@ -315,8 +374,8 @@ async def scrape_flipkart(fsn: str, browser: Browser, proxy_manager: ProxyManage
             _cache_url(fsn, resolved_url)
 
             logger.info(
-                "Flipkart scraped FSN %s: price=%s, mrp=%s, discount=%s, rating=%s, count=%s",
-                fsn, price, mrp, discount, rating, rating_count,
+                "Flipkart scraped FSN %s: price=%s, mrp=%s, discount=%s, rating=%s, count=%s, fulfilled_by=%s",
+                fsn, price, mrp, discount, rating, rating_count, fulfilled_by,
             )
 
             return {
@@ -326,6 +385,7 @@ async def scrape_flipkart(fsn: str, browser: Browser, proxy_manager: ProxyManage
                 "discount": discount,
                 "rating": rating,
                 "rating_count": rating_count,
+                "fulfilled_by": fulfilled_by,
                 "status": "available",
                 "platform": "flipkart",
                 "url": resolved_url,
