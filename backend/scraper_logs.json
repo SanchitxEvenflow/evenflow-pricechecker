@@ -1,5 +1,16 @@
 [
   {
+    "run_id": "3212c2df",
+    "type": "zepto_manual",
+    "triggered_at": "2026-06-04T17:08:34.394393+05:30",
+    "completed_at": "2026-06-04T17:08:55.428101+05:30",
+    "total_asins": 4,
+    "success_count": 36,
+    "failed_count": 0,
+    "sheet_tab": "Zepto_Manual_2026-06-04_17-08",
+    "status": "completed"
+  },
+  {
     "run_id": "548c681e",
     "type": "flipkart_manual",
     "triggered_at": "2026-06-04T16:12:34.756253+05:30",
