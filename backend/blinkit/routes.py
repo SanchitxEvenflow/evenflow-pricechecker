@@ -30,7 +30,6 @@ async def check_blinkit_price(body: BlinkitRequest, request: Request):
         )
 
     proxy_manager = request.app.state.proxy_manager
-    proxy = proxy_manager.get_proxy()
 
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(
@@ -42,15 +41,9 @@ async def check_blinkit_price(body: BlinkitRequest, request: Request):
             lat=city_data["lat"],
             lon=city_data["lng"],
             city=body.city,
-            proxy=proxy,
+            proxy_manager=proxy_manager,
         ),
     )
-
-    # Report proxy outcome
-    if result.get("status") == "error":
-        proxy_manager.report_failure(proxy)
-    else:
-        proxy_manager.report_success(proxy)
 
     return BlinkitResponse(**result)
 
@@ -85,7 +78,6 @@ async def check_blinkit_all_cities(body: BlinkitAllCitiesRequest, request: Reque
 
     async def worker(product_id: str, loc: dict) -> None:
         async with sem:
-            proxy = proxy_manager.get_proxy()
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(
                 None,
@@ -96,15 +88,9 @@ async def check_blinkit_all_cities(body: BlinkitAllCitiesRequest, request: Reque
                     lat=loc["lat"],
                     lon=loc["lng"],
                     city=loc["name"],
-                    proxy=proxy,
+                    proxy_manager=proxy_manager,
                 ),
             )
-            # Report proxy outcome
-            if result.get("status") == "error":
-                proxy_manager.report_failure(proxy)
-            else:
-                proxy_manager.report_success(proxy)
-
             await queue.put(result)
 
     async def event_stream():

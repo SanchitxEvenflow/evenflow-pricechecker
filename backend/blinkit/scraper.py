@@ -4,20 +4,20 @@ HTTP Client using curl_cffi for Blinkit's layout/product API.
 Ported from blinkitscraper/client.py — adapted for price-checker conventions.
 
 Key differences from the standalone scraper:
-  - Accepts proxy as a string param (from ProxyManager) instead of internal get_random_proxy()
+  - Accepts ProxyManager and handles proxy rotation + retry internally (like amazon scraper)
   - Returns a plain dict (not Pydantic model) matching price-checker conventions
-  - No tenacity @retry decorator — caller handles retries
   - Status values: "available", "out_of_stock", "unserviceable", "error"
 """
 
 import logging
 import os
 import re
-import threading
 from datetime import datetime, timezone, timedelta
 
 from curl_cffi import requests
 from curl_cffi.requests.errors import RequestsError
+
+from proxy.manager import ProxyManager
 
 logger = logging.getLogger(__name__)
 
@@ -185,41 +185,6 @@ def _extract_product_from_layout(json_data: dict) -> dict:
     }
 
 
-# ── Thread-local session management ────────────────────────────────────────
-
-_thread_local = threading.local()
-
-
-def _get_thread_session(proxy: str | None = None):
-    """Get or create a thread-local curl_cffi session with Phase 1 handshake."""
-    if not hasattr(_thread_local, "session"):
-        proxies = {"http": proxy, "https": proxy} if proxy else None
-        session = requests.Session(impersonate="chrome110", proxies=proxies)
-
-        # Phase 1: Landing page handshake — warm up cookies
-        logger.info("Phase 1: Session handshake with blinkit.com/robots.txt")
-        try:
-            landing = session.get("https://blinkit.com/robots.txt", headers=BROWSER_HEADERS, timeout=15)
-            if landing.status_code != 200:
-                logger.warning("Phase 1 landing returned status: %d", landing.status_code)
-        except Exception as e:
-            logger.warning("Phase 1 handshake failed: %s", e)
-
-        _thread_local.session = session
-
-    return _thread_local.session
-
-
-def _clear_thread_session():
-    """Close and discard the thread-local session (e.g. on network error for retry)."""
-    if hasattr(_thread_local, "session"):
-        try:
-            _thread_local.session.close()
-        except Exception:
-            pass
-        del _thread_local.session
-
-
 # ── Main fetch function ────────────────────────────────────────────────────
 
 def fetch_blinkit_data(
@@ -228,10 +193,13 @@ def fetch_blinkit_data(
     lat: float,
     lon: float,
     city: str,
-    proxy: str | None = None,
+    proxy_manager: ProxyManager | None = None,
 ) -> dict:
     """
     Fetch product data from Blinkit's layout/product API.
+
+    Retries up to min(5, pool_size) proxies on block/error, then falls back to
+    a direct connection — mirroring amazon scraper behaviour.
 
     This is a synchronous function (curl_cffi). The caller must wrap it with
     asyncio.loop.run_in_executor() when used in async contexts.
@@ -243,7 +211,6 @@ def fetch_blinkit_data(
     product_url = f"https://blinkit.com/pr/x/pr_{item_id}"
     now = datetime.now(IST).isoformat()
 
-    # Error result template
     def _error_result(msg: str = "error") -> dict:
         return {
             "product_id": item_id,
@@ -279,94 +246,134 @@ def fetch_blinkit_data(
 
     logger.info("POSTing to Blinkit for item_id=%s, city=%s (%s, %s)", item_id, city, lat, lon)
 
-    try:
-        session = _get_thread_session(proxy)
+    max_proxy_attempts = min(5, len(proxy_manager.active_pool) if proxy_manager else 0)
 
-        # Inject location cookies
-        session.cookies.set("gr_1_lat", str(lat), domain=".blinkit.com", path="/")
-        session.cookies.set("gr_1_lon", str(lon), domain=".blinkit.com", path="/")
-        session.cookies.set("city", str(city), domain=".blinkit.com", path="/")
-        session.cookies.set("gr_1_deviceId", str(BLINKIT_DEVICE_ID), domain=".blinkit.com", path="/")
+    for attempt in range(max_proxy_attempts + 1):  # +1 = direct-connection fallback
+        proxy = None
+        if attempt < max_proxy_attempts and proxy_manager:
+            proxy = proxy_manager.get_proxy()
+        else:
+            logger.info("All proxies exhausted — trying direct connection for item_id=%s", item_id)
 
-        # Phase 2 intentionally skipped — /eta endpoint poisons session cookies
-        # causing is_success=False for many items.
+        proxies = {"http": proxy, "https": proxy} if proxy else None
+        session = requests.Session(impersonate="chrome110", proxies=proxies)
 
-        # Phase 3: Layout POST request
-        logger.info("Phase 3: POST layout for item_id=%s", item_id)
-        response = session.post(url, headers=headers, json=payload, timeout=15)
+        try:
+            # Phase 1: Landing page handshake — warm up cookies
+            logger.info("Phase 1: Session handshake (attempt %d/%d) for item_id=%s",
+                        attempt + 1, max_proxy_attempts + 1, item_id)
+            try:
+                landing = session.get("https://blinkit.com/robots.txt", headers=BROWSER_HEADERS, timeout=15)
+                if landing.status_code != 200:
+                    logger.warning("Phase 1 returned status %d", landing.status_code)
+            except Exception as e:
+                logger.warning("Phase 1 handshake failed: %s", e)
 
-        # Non-200 handling
-        if response.status_code != 200:
-            logger.error("Blinkit API returned status %d for item_id=%s", response.status_code, item_id)
-            _clear_thread_session()
+            # Inject location cookies
+            session.cookies.set("gr_1_lat", str(lat), domain=".blinkit.com", path="/")
+            session.cookies.set("gr_1_lon", str(lon), domain=".blinkit.com", path="/")
+            session.cookies.set("city", str(city), domain=".blinkit.com", path="/")
+            session.cookies.set("gr_1_deviceId", str(BLINKIT_DEVICE_ID), domain=".blinkit.com", path="/")
+
+            # Phase 2 intentionally skipped — /eta endpoint poisons session cookies
+            # causing is_success=False for many items.
+
+            # Phase 3: Layout POST request
+            logger.info("Phase 3: POST layout for item_id=%s", item_id)
+            response = session.post(url, headers=headers, json=payload, timeout=15)
 
             if response.status_code in (401, 403):
-                logger.error("BLOCKED: Get a new BLINKIT_DEVICE_ID or rotate proxies")
+                logger.warning("Blocked (HTTP %d) on attempt %d for item_id=%s — rotating proxy",
+                               response.status_code, attempt + 1, item_id)
+                if proxy_manager:
+                    proxy_manager.report_failure(proxy)
+                if attempt < max_proxy_attempts:
+                    continue
+                return _error_result(f"blocked_{response.status_code}")
 
-            if response.status_code in (500, 502, 503, 504):
-                logger.error("Upstream server error %d — returning error dict", response.status_code)
-                return _error_result(f"upstream_{response.status_code}")
+            if response.status_code != 200:
+                logger.error("Blinkit API returned status %d for item_id=%s", response.status_code, item_id)
+                if proxy_manager:
+                    proxy_manager.report_failure(proxy)
+                if attempt < max_proxy_attempts:
+                    continue
+                return _error_result(f"http_{response.status_code}")
 
-            return _error_result(f"http_{response.status_code}")
+            json_data = response.json()
 
-        json_data = response.json()
+            # Handle is_success=False
+            if json_data.get("is_success") is False:
+                snippets = json_data.get("response", {}).get("snippets")
+                if snippets is None:
+                    logger.warning("Item %s is unserviceable at pincode %s", item_id, pincode)
+                    if proxy_manager:
+                        proxy_manager.report_success(proxy)
+                    return {
+                        "product_id": item_id,
+                        "city": city,
+                        "title": f"Unserviceable at {city}",
+                        "price": None,
+                        "mrp": None,
+                        "status": "unserviceable",
+                        "is_sold_out": True,
+                        "url": product_url,
+                        "checked_at": now,
+                    }
+                else:
+                    logger.error("Blinkit rejected with non-null snippets: %s", response.text[:300])
+                    if proxy_manager:
+                        proxy_manager.report_failure(proxy)
+                    if attempt < max_proxy_attempts:
+                        continue
+                    return _error_result("rejected_with_snippets")
 
-        # Handle is_success=False
-        if json_data.get("is_success") is False:
-            snippets = json_data.get("response", {}).get("snippets")
-            if snippets is None:
-                # Item is unserviceable at this pincode/dark store
-                logger.warning("Item %s is unserviceable at pincode %s", item_id, pincode)
-                return {
-                    "product_id": item_id,
-                    "city": city,
-                    "title": f"Unserviceable at {city}",
-                    "price": None,
-                    "mrp": None,
-                    "status": "unserviceable",
-                    "is_sold_out": True,
-                    "url": product_url,
-                    "checked_at": now,
-                }
-            else:
-                # is_success=False but snippets exist — unexpected
-                logger.error("Blinkit rejected with non-null snippets: %s", response.text[:300])
-                return _error_result("rejected_with_snippets")
+            # Extract product data from nested layout tree
+            product = _extract_product_from_layout(json_data)
 
-        # Extract product data from nested layout tree
-        product = _extract_product_from_layout(json_data)
+            if proxy_manager:
+                proxy_manager.report_success(proxy)
 
-        return {
-            "product_id": item_id,
-            "city": city,
-            "title": product["title"],
-            "price": product["price"],
-            "mrp": product["mrp"],
-            "status": product["status"],
-            "is_sold_out": product["is_sold_out"],
-            "url": product_url,
-            "checked_at": now,
-        }
+            return {
+                "product_id": item_id,
+                "city": city,
+                "title": product["title"],
+                "price": product["price"],
+                "mrp": product["mrp"],
+                "status": product["status"],
+                "is_sold_out": product["is_sold_out"],
+                "url": product_url,
+                "checked_at": now,
+            }
 
-    except RequestsError as e:
-        logger.error("Network error for item_id=%s: %s", item_id, e)
-        _clear_thread_session()
-        return _error_result(f"network_error: {e}")
+        except (RequestsError, TimeoutError) as e:
+            logger.error("Network/timeout error on attempt %d for item_id=%s: %s", attempt + 1, item_id, e)
+            if proxy_manager:
+                proxy_manager.report_failure(proxy)
+            if attempt < max_proxy_attempts:
+                continue
+            return _error_result(f"network_error: {e}")
 
-    except TimeoutError as e:
-        logger.error("Timeout for item_id=%s: %s", item_id, e)
-        _clear_thread_session()
-        return _error_result(f"timeout: {e}")
+        except ValueError as e:
+            logger.error("JSON/extraction error on attempt %d for item_id=%s: %s", attempt + 1, item_id, e)
+            if "response" in dir():
+                text = response.text.lower()
+                if "cloudflare" in text or "<html" in text:
+                    logger.error("Cloudflare challenge detected — rotate DEVICE_ID or proxies")
+                    if proxy_manager:
+                        proxy_manager.report_failure(proxy)
+                    if attempt < max_proxy_attempts:
+                        continue
+            return _error_result(f"extraction_error: {e}")
 
-    except ValueError as e:
-        logger.error("JSON/extraction error for item_id=%s: %s", item_id, e)
-        # Check for Cloudflare challenge
-        if "response" in locals():
-            text = response.text.lower()
-            if "cloudflare" in text or "<html" in text:
-                logger.error("Cloudflare challenge detected — rotate DEVICE_ID or proxies")
-        return _error_result(f"extraction_error: {e}")
+        except Exception as e:
+            logger.error("Unexpected error on attempt %d for item_id=%s: %s", attempt + 1, item_id, e)
+            if proxy_manager:
+                proxy_manager.report_failure(proxy)
+            if attempt < max_proxy_attempts:
+                continue
+            return _error_result(f"unexpected: {e}")
 
-    except Exception as e:
-        logger.error("Unexpected error for item_id=%s: %s", item_id, e)
-        return _error_result(f"unexpected: {e}")
+        finally:
+            session.close()
+
+    return _error_result("max_retries_exceeded")
