@@ -12,7 +12,7 @@ BLINKIT_CITIES = [
 
 ZEPTO_CITIES = [
     "Bangalore", "NCR", "Mumbai", "Hyderabad", "Kolkata",
-    "Pune", "Ahmedabad", "Chennai", "Patna", "Dehradun",
+    "Pune", "Ahmedabad", "Chennai", "Dehradun",
 ]
 
 

@@ -177,8 +177,8 @@ class GoogleSheetsClient:
     def batch_update_zepto_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict[str, Any]]):
         """Batch-update Zepto result rows.
 
-        Each update: {"row": int, "values": [price, mrp, status] × 10 cities}
-        Updates columns B through AE (30 values per row).
+        Each update: {"row": int, "values": [price, mrp, status] × 9 cities}
+        Updates columns B through AB (27 values per row).
         """
         if not self.service:
             raise ValueError("Google Sheets service not initialized (missing credentials).")
@@ -187,7 +187,7 @@ class GoogleSheetsClient:
             row = update["row"]
             vals = update["values"]
             data.append({
-                "range": f"{self._tab(tab_name)}!B{row}:AE{row}",
+                "range": f"{self._tab(tab_name)}!B{row}:AB{row}",
                 "values": [vals],
             })
         body = {"valueInputOption": "USER_ENTERED", "data": data}

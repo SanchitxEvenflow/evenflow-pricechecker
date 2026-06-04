@@ -41,6 +41,7 @@ async def check_zepto_price(body: ZeptoRequest, request: Request):
             lat=city_data["lat"],
             lon=city_data["lng"],
             city=body.city,
+            store_id=city_data["store_id"],
             proxy_manager=proxy_manager,
         ),
     )
@@ -73,7 +74,7 @@ async def check_zepto_all_cities(body: ZeptoAllCitiesRequest, request: Request):
 
     if total == 0:
         async def empty_stream():
-            yield f"data: {json.dumps({'done': True, 'total': 0})}\\n\\n"
+            yield f"data: {json.dumps({'done': True, 'total': 0})}\n\n"
         return StreamingResponse(empty_stream(), media_type="text/event-stream")
 
     async def worker(product_id: str, loc: dict) -> None:
@@ -88,6 +89,7 @@ async def check_zepto_all_cities(body: ZeptoAllCitiesRequest, request: Request):
                     lat=loc["lat"],
                     lon=loc["lng"],
                     city=loc["name"],
+                    store_id=loc["store_id"],
                     proxy_manager=proxy_manager,
                 ),
             )
@@ -105,11 +107,11 @@ async def check_zepto_all_cities(body: ZeptoAllCitiesRequest, request: Request):
                 "progress": done,
                 "total": total,
             })
-            yield f"data: {payload}\\n\\n"
+            yield f"data: {payload}\n\n"
 
         # Ensure all tasks are finished
         await asyncio.gather(*tasks, return_exceptions=True)
-        yield f"data: {json.dumps({'done': True, 'total': total})}\\n\\n"
+        yield f"data: {json.dumps({'done': True, 'total': total})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
