@@ -5,6 +5,10 @@ No database, no auth — pure request → scrape → return JSON.
 """
 
 import asyncio
+import sys
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 import logging
 import os
 import re

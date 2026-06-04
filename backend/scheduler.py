@@ -144,6 +144,7 @@ async def run_scheduled_scrape(app) -> None:
 
 async def run_manual_trigger(app) -> None:
     """Called when user manually triggers the full scrape from the UI."""
+    await asyncio.sleep(0.1)
     await _run_full_scrape(app, tab_prefix="Manual_Trigger", run_type="manual")
 
 
@@ -291,6 +292,7 @@ async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str) -> None:
 
 async def run_manual_blinkit_trigger(app) -> None:
     """Called when user manually triggers the Blinkit full scrape from the UI."""
+    await asyncio.sleep(0.1)
     await _run_full_blinkit_scrape(app, tab_prefix="Blinkit_Manual", run_type="blinkit_manual")
 
 
@@ -364,6 +366,7 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str) -> None:
                     lat=loc["lat"],
                     lon=loc["lng"],
                     city=loc["name"],
+                    store_id=loc["store_id"],
                     proxy_manager=proxy_manager,
                 ),
             )
@@ -430,6 +433,7 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str) -> None:
 
 async def run_manual_zepto_trigger(app) -> None:
     """Called when user manually triggers the Zepto full scrape from the UI."""
+    await asyncio.sleep(0.1)
     await _run_full_zepto_scrape(app, tab_prefix="Zepto_Manual", run_type="zepto_manual")
 
 

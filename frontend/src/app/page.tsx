@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback } from "react";
 import Image from "next/image";
 
-const API = "";
+const API = process.env.NEXT_PUBLIC_API_URL || "";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 interface RatingBreakdown {
@@ -513,7 +513,7 @@ function SchedulerPage({ t, dark }: { t: any; dark: boolean }) {
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <h2 className="text-2xl font-bold"><span className="text-[#FF3269]">zepto</span> — Manual Trigger</h2>
-            <p className={`mt-1 text-sm ${t.muted}`}>Run a full scrape of all PIDs from the Zepto Google Sheet across all 10 cities. Results are written to a new tab: <code className={`text-xs px-1.5 py-0.5 rounded ${dark ? "bg-neutral-800" : "bg-neutral-100"}`}>Zepto_Manual_YYYY-MM-DD_HH-MM</code></p>
+            <p className={`mt-1 text-sm ${t.muted}`}>Run a full scrape of all PIDs from the Zepto Google Sheet across all 9 cities. Results are written to a new tab: <code className={`text-xs px-1.5 py-0.5 rounded ${dark ? "bg-neutral-800" : "bg-neutral-100"}`}>Zepto_Manual_YYYY-MM-DD_HH-MM</code></p>
           </div>
           <button
             onClick={handleZeptoTrigger}
@@ -787,7 +787,7 @@ function BlinkitPage({ t, dark }: { t: any; dark: boolean }) {
 // ═══════════════════════════════════════════════════════════════════════════
 // ZEPTO PAGE
 // ═══════════════════════════════════════════════════════════════════════════
-const ZEPTO_CITIES = ["Bangalore","NCR","Mumbai","Hyderabad","Kolkata","Pune","Ahmedabad","Chennai","Patna","Dehradun"];
+const ZEPTO_CITIES = ["Bangalore","NCR","Mumbai","Hyderabad","Kolkata","Pune","Ahmedabad","Chennai","Dehradun"];
 
 interface ZeptoResult { product_id: string; city: string; title?: string|null; price?: number|null; mrp?: number|null; status: string; is_sold_out?: boolean; url?: string; checked_at?: string; }
 
@@ -811,6 +811,7 @@ function ZeptoPage({ t, dark }: { t: any; dark: boolean }) {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ product_ids: ids }),
       });
+      if (!res.ok) throw new Error(`Server returned ${res.status}: ${res.statusText}`);
       const reader = res.body?.getReader();
       if (!reader) throw new Error("No stream");
       const decoder = new TextDecoder();
@@ -950,7 +951,7 @@ function ZeptoPage({ t, dark }: { t: any; dark: boolean }) {
                       return (
                         <td key={city} className="px-3 py-3 text-center">
                           <span className={`inline-block px-2 py-1 rounded-lg text-xs font-semibold border ${statusColor(r.status)}`}>
-                            {r.price != null ? `₹${r.price}` : r.status.replace("_", " ")}
+                            {r.price != null ? `₹${r.price}` : (r.error_message || r.status).replace(/_/g, " ")}
                           </span>
                           {r.mrp != null && r.price != null && r.mrp > r.price && (
                             <p className={`text-[10px] mt-0.5 line-through ${t.muted}`}>₹{r.mrp}</p>
