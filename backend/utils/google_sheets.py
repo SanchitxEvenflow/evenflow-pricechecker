@@ -153,6 +153,48 @@ class GoogleSheetsClient:
             spreadsheetId=spreadsheet_id, body=body
         ).execute()
 
+    def write_zepto_header_and_pids(self, spreadsheet_id: str, tab_name: str, pids: list[str]) -> None:
+        """Write wide-format header + PID list to a newly created Zepto result tab.
+
+        Header: PID | {City} Price | {City} MRP | {City} Status  ×  10 cities  (31 columns total)
+        PIDs are written to column A rows 2+.
+        """
+        if not self.service:
+            raise ValueError("Google Sheets service not initialized (missing credentials).")
+        from utils.scrape_helpers import ZEPTO_CITIES
+        city_cols = []
+        for city in ZEPTO_CITIES:
+            city_cols.extend([f"{city} Price", f"{city} MRP", f"{city} Status"])
+        header = ["PID"] + city_cols
+        rows: list[list[str]] = [header] + [[pid] for pid in pids]
+        self.service.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id,
+            range=f"{self._tab(tab_name)}!A1",
+            valueInputOption="USER_ENTERED",
+            body={"values": rows},
+        ).execute()
+
+    def batch_update_zepto_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict[str, Any]]):
+        """Batch-update Zepto result rows.
+
+        Each update: {"row": int, "values": [price, mrp, status] × 10 cities}
+        Updates columns B through AE (30 values per row).
+        """
+        if not self.service:
+            raise ValueError("Google Sheets service not initialized (missing credentials).")
+        data = []
+        for update in updates:
+            row = update["row"]
+            vals = update["values"]
+            data.append({
+                "range": f"{self._tab(tab_name)}!B{row}:AE{row}",
+                "values": [vals],
+            })
+        body = {"valueInputOption": "USER_ENTERED", "data": data}
+        return self.service.spreadsheets().values().batchUpdate(
+            spreadsheetId=spreadsheet_id, body=body
+        ).execute()
+
     def batch_update_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict[str, Any]]):
         """
         Updates multiple rows in the spreadsheet.

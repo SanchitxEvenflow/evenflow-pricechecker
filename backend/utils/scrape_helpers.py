@@ -10,6 +10,11 @@ BLINKIT_CITIES = [
     "Pune", "Ahmedabad", "Chennai", "Patna", "Dehradun",
 ]
 
+ZEPTO_CITIES = [
+    "Bangalore", "NCR", "Mumbai", "Hyderabad", "Kolkata",
+    "Pune", "Ahmedabad", "Chennai", "Patna", "Dehradun",
+]
+
 
 def format_breakdown(breakdown: dict | None) -> str:
     if not breakdown:
@@ -29,6 +34,25 @@ def format_blinkit_row(results_by_city: dict) -> list:
     """
     values = []
     for city in BLINKIT_CITIES:
+        r = results_by_city.get(city, {})
+        price = r.get("price")
+        mrp = r.get("mrp")
+        status = r.get("status", "")
+        values.extend([
+            str(price) if price is not None else "",
+            str(mrp) if mrp is not None else "",
+            status,
+        ])
+    return values
+
+
+def format_zepto_row(results_by_city: dict) -> list:
+    """Flatten per-city Zepto results into a single sheet row.
+
+    Returns a list of 30 values: [price, mrp, status] × 10 cities in ZEPTO_CITIES order.
+    """
+    values = []
+    for city in ZEPTO_CITIES:
         r = results_by_city.get(city, {})
         price = r.get("price")
         mrp = r.get("mrp")

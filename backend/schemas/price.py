@@ -134,3 +134,30 @@ class BlinkitCityResult(BaseModel):
 
 class BlinkitResponse(BlinkitCityResult):
     pass
+
+
+# ── Zepto Models ────────────────────────────────────────────────────────────
+
+class ZeptoRequest(BaseModel):
+    product_id: str
+    city: str
+
+
+class ZeptoAllCitiesRequest(BaseModel):
+    product_ids: list[str]
+
+
+class ZeptoCityResult(BaseModel):
+    product_id: str
+    city: str
+    title: str | None = None
+    price: float | None = None
+    mrp: float | None = None
+    status: str
+    is_sold_out: bool = False
+    url: str
+    checked_at: str
+
+
+class ZeptoResponse(ZeptoCityResult):
+    pass
