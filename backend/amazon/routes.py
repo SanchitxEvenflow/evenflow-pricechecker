@@ -57,7 +57,7 @@ async def check_amazon_price(body: AmazonRequest, request: Request):
 
 # ── Sheets Router ───────────────────────────────────────────────────────────
 
-sheets_router = APIRouter(prefix="/sheets", tags=["Sheets"])
+sheets_router = APIRouter(prefix="/sheets/amazon", tags=["Sheets"])
 
 
 def get_sheets_client():
@@ -269,7 +269,7 @@ async def scrape_batch_stream(
 
 # ── Manual Scrape Router ────────────────────────────────────────────────────
 
-manual_router = APIRouter(prefix="/api", tags=["Manual"])
+manual_router = APIRouter(prefix="/api/amazon", tags=["Manual"])
 
 
 class ManualScrapeRequest(BaseModel):

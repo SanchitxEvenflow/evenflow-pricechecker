@@ -98,7 +98,53 @@ JS_EXTRACT_ALL = """
         } catch(e) {}
     }
 
-    // ── Strategy 2: Visible DOM text extraction ──
+    // ── Strategy 2: Targeted CSS selectors (new Flipkart React layout) ──
+
+    // Price + MRP: div.css-g5y9jx price container
+    if (!result.price || !result.mrp) {
+        const container = document.querySelector('div.css-g5y9jx');
+        if (container) {
+            if (!result.price) {
+                for (const child of container.querySelectorAll('div')) {
+                    const s = child.getAttribute('style') || '';
+                    if (!s.includes('line-through')) {
+                        const text = child.textContent.trim();
+                        if (/^₹[\\d,]+$/.test(text)) { result.price = text; break; }
+                    }
+                }
+            }
+            if (!result.mrp) {
+                for (const child of container.querySelectorAll('div')) {
+                    const s = child.getAttribute('style') || '';
+                    if (s.includes('line-through')) {
+                        const digits = child.textContent.trim().replace(/[^\\d,]/g, '');
+                        if (digits) { result.mrp = '₹' + digits; break; }
+                    }
+                }
+            }
+        }
+    }
+
+    // Rating: div.css-146c3p1 with inter_bold font (rating badge)
+    if (!result.rating) {
+        for (const el of document.querySelectorAll('div.css-146c3p1')) {
+            const s = el.getAttribute('style') || '';
+            if (s.includes('inter_bold')) {
+                const val = parseFloat(el.textContent.trim());
+                if (val >= 1 && val <= 5) { result.rating = String(val); break; }
+            }
+        }
+    }
+
+    // Rating count: "based on N ratings by" text pattern
+    if (!result.rating_count) {
+        for (const el of document.querySelectorAll('div, span')) {
+            const m = el.textContent.trim().match(/based on ([\\d,]+)\\s*ratings?/i);
+            if (m) { result.rating_count = m[1]; break; }
+        }
+    }
+
+    // ── Strategy 3: Visible DOM text extraction ──
     // Price: look for ₹ symbol in likely price containers
     if (!result.price) {
         // Try all elements that contain ₹ and look like a price
@@ -120,7 +166,7 @@ JS_EXTRACT_ALL = """
         }
     }
 
-    // MRP: look for strikethrough prices
+    // MRP: look for strikethrough prices (Strategy 3 fallback)
     if (!result.mrp) {
         const strikeThroughs = document.querySelectorAll('s, [style*="line-through"], del');
         for (const el of strikeThroughs) {

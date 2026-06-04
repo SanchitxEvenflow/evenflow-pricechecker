@@ -1,5 +1,16 @@
 [
   {
+    "run_id": "548c681e",
+    "type": "flipkart_manual",
+    "triggered_at": "2026-06-04T16:12:34.756253+05:30",
+    "completed_at": "2026-06-04T16:19:23.250629+05:30",
+    "total_asins": 256,
+    "success_count": 255,
+    "failed_count": 1,
+    "sheet_tab": "Flipkart_Manual_2026-06-04_16-12",
+    "status": "completed"
+  },
+  {
     "run_id": "adbffe7c",
     "type": "blinkit_manual",
     "triggered_at": "2026-06-03T18:05:33.716756+05:30",

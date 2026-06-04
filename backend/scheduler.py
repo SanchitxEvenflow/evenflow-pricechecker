@@ -10,8 +10,9 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from functools import partial
 
-from utils.scrape_helpers import CHUNK_SIZE, SCRAPE_CONCURRENCY, format_update as _format_update, BLINKIT_CITIES, format_blinkit_row
+from utils.scrape_helpers import CHUNK_SIZE, SCRAPE_CONCURRENCY, format_update as _format_update, format_flipkart_update as _format_flipkart_update, BLINKIT_CITIES, format_blinkit_row
 from amazon.scraper import scrape_amazon
+from flipkart.scraper import scrape_flipkart
 from blinkit.scraper import fetch_blinkit_data
 from blinkit.locations import LOCATIONS
 from utils.google_sheets import GoogleSheetsClient
@@ -290,6 +291,120 @@ async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str) -> None:
 async def run_manual_blinkit_trigger(app) -> None:
     """Called when user manually triggers the Blinkit full scrape from the UI."""
     await _run_full_blinkit_scrape(app, tab_prefix="Blinkit_Manual", run_type="blinkit_manual")
+
+
+async def _run_full_flipkart_scrape(app, tab_prefix: str, run_type: str) -> None:
+    """Core scrape logic for Flipkart sheet-based runs.
+
+    Reads FSNs from FLIPKART_SHEET_ID / FLIPKART_SOURCE_TAB, scrapes each FSN
+    via Playwright, and writes results to a new tab in the Flipkart sheet.
+    """
+    sheets_client = GoogleSheetsClient()
+    sheet_id = os.getenv("FLIPKART_SHEET_ID", "")
+    source_tab = os.getenv("FLIPKART_SOURCE_TAB", "Sheet1")
+
+    if not sheet_id:
+        logger.error("Flipkart: no sheet ID configured (set FLIPKART_SHEET_ID)")
+        return
+
+    run_start = datetime.now(IST)
+    logger.info("Flipkart: starting %s scrape — sheet=%s source_tab=%s started_at=%s",
+                run_type, sheet_id, source_tab, run_start.strftime("%H:%M:%S"))
+
+    try:
+        source_rows = sheets_client.get_asins_with_rows(sheet_id, source_tab)
+    except Exception:
+        logger.exception("Flipkart: failed to read FSNs from source tab")
+        return
+
+    if not source_rows:
+        logger.warning("Flipkart: no FSNs found in source tab '%s' — skipping run", source_tab)
+        return
+
+    now = datetime.now(IST)
+    new_tab = f"{tab_prefix}_{now.strftime('%Y-%m-%d_%H-%M')}"
+    fsns = [r["asin"] for r in source_rows]  # get_asins_with_rows uses "asin" key
+
+    run_id = run_logger.create_log(run_type, len(fsns))
+
+    try:
+        sheets_client.create_tab(sheet_id, new_tab)
+        sheets_client.write_header_and_fsns(sheet_id, new_tab, fsns)
+        logger.info("Flipkart: created tab '%s' with %d FSNs", new_tab, len(fsns))
+    except Exception as e:
+        logger.exception("Flipkart: failed to create result tab '%s'", new_tab)
+        app.state.flipkart_cron_status.update({"is_running": False, "error": f"Failed to create tab '{new_tab}'"})
+        run_logger.fail_log(run_id, f"Failed to create tab '{new_tab}': {e}")
+        return
+
+    # Remap row numbers — header is row 1, FSNs start at row 2
+    remapped = [{"row": i + 2, "fsn": fsn} for i, fsn in enumerate(fsns)]
+
+    app.state.flipkart_cron_status.update({
+        "is_running": True,
+        "last_run_at": run_start.isoformat(),
+        "last_run_tab": new_tab,
+        "progress": 0,
+        "total": len(remapped),
+        "last_run_duration_seconds": None,
+        "last_run_processed": None,
+        "error": None,
+    })
+
+    browser = app.state.playwright_browser
+    proxy_manager = app.state.proxy_manager
+    sem = asyncio.Semaphore(SCRAPE_CONCURRENCY)
+
+    async def scrape_one(row_data: dict) -> dict:
+        async with sem:
+            result = await scrape_flipkart(row_data["fsn"], browser, proxy_manager)
+            result["row"] = row_data["row"]
+            return result
+
+    total_processed = 0
+    total_success = 0
+    total_failed = 0
+
+    for chunk_start in range(0, len(remapped), CHUNK_SIZE):
+        chunk = remapped[chunk_start : chunk_start + CHUNK_SIZE]
+        try:
+            chunk_results = await asyncio.gather(*[scrape_one(r) for r in chunk])
+            updates = [_format_flipkart_update(res) for res in chunk_results]
+            sheets_client.batch_update_flipkart_rows(sheet_id, new_tab, updates)
+            total_processed += len(chunk_results)
+
+            for res in chunk_results:
+                status = res.get("status", "error")
+                if status in ("error", "not_found", "blocked", "invalid_format", "unavailable"):
+                    total_failed += 1
+                else:
+                    total_success += 1
+
+            app.state.flipkart_cron_status["progress"] = total_processed
+            run_logger.update_progress(run_id, total_success, total_failed)
+            logger.info("Flipkart: wrote chunk %d–%d to tab '%s' (%d/%d done)",
+                        chunk[0]["row"], chunk[-1]["row"], new_tab, total_processed, len(remapped))
+        except Exception:
+            logger.exception("Flipkart: chunk write failed at offset %d — continuing", chunk_start)
+
+    elapsed = datetime.now(IST) - run_start
+    minutes, seconds = divmod(int(elapsed.total_seconds()), 60)
+    logger.info("Flipkart: run complete — %d/%d FSNs written to tab '%s' | total time: %dm %ds",
+                total_processed, len(remapped), new_tab, minutes, seconds)
+
+    app.state.flipkart_cron_status.update({
+        "is_running": False,
+        "last_run_duration_seconds": int(elapsed.total_seconds()),
+        "last_run_processed": total_processed,
+        "progress": total_processed,
+    })
+
+    run_logger.complete_log(run_id, total_success, total_failed, new_tab)
+
+
+async def run_manual_flipkart_trigger(app) -> None:
+    """Called when user manually triggers the Flipkart full scrape from the UI."""
+    await _run_full_flipkart_scrape(app, tab_prefix="Flipkart_Manual", run_type="flipkart_manual")
 
 
 def setup_scheduler(app) -> AsyncIOScheduler | None:
