@@ -139,6 +139,16 @@ async def lifespan(app: FastAPI):
         "progress": None,
         "error": None,
     }
+    app.state.flipkart_cron_status = {
+        "is_running": False,
+        "last_run_at": None,
+        "last_run_tab": None,
+        "last_run_duration_seconds": None,
+        "last_run_processed": None,
+        "total": None,
+        "progress": None,
+        "error": None,
+    }
     # app.state.cron_scheduler = setup_scheduler(app)  # cron disabled
     # if app.state.cron_scheduler:
     #     logger.info("Cron scheduler active — interval=%s min", os.getenv("CRON_INTERVAL_MINUTES", "60"))
