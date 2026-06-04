@@ -26,3 +26,5 @@ Thumbs.db
 # Project specific
 # Ignoring proxies.txt because it contains proxy credentials
 proxies.txt
+
+test_zepto.py
