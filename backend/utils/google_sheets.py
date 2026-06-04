@@ -194,7 +194,7 @@ class GoogleSheetsClient:
         if not self.service:
             raise ValueError("Google Sheets service not initialized (missing credentials).")
         rows: list[list[str]] = [
-            ["FSN", "Price", "MRP", "Discount", "Rating", "Rating Count", "Status", "Checked At"]
+            ["FSN", "Price", "MRP", "Discount", "Rating", "Rating Count", "Fulfilled By", "Status", "Checked At"]
         ]
         rows.extend([[f] for f in fsns])
         self.service.spreadsheets().values().update(
@@ -207,8 +207,8 @@ class GoogleSheetsClient:
     def batch_update_flipkart_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict[str, Any]]):
         """Batch-update Flipkart result rows.
 
-        Each update: {"row": int, "values": [price, mrp, discount, rating, rating_count, status, checked_at]}
-        Updates columns B through H (7 values per row).
+        Each update: {"row": int, "values": [price, mrp, discount, rating, rating_count, fulfilled_by, status, checked_at]}
+        Updates columns B through I (8 values per row).
         """
         if not self.service:
             raise ValueError("Google Sheets service not initialized (missing credentials).")
@@ -217,7 +217,7 @@ class GoogleSheetsClient:
             row = update["row"]
             vals = update["values"]
             data.append({
-                "range": f"{self._tab(tab_name)}!B{row}:H{row}",
+                "range": f"{self._tab(tab_name)}!B{row}:I{row}",
                 "values": [vals],
             })
         body = {"valueInputOption": "USER_ENTERED", "data": data}

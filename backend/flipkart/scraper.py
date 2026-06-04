@@ -68,7 +68,7 @@ def _cache_url(fsn: str, resolved_url: str) -> None:
 # This JS runs in the browser and returns all extractable product data at once
 JS_EXTRACT_ALL = """
 () => {
-    const result = { price: null, mrp: null, discount: null, rating: null, rating_count: null };
+    const result = { price: null, mrp: null, discount: null, rating: null, rating_count: null, fulfilled_by: null };
 
     // ── Strategy 1: JSON-LD structured data ──
     const ldScripts = document.querySelectorAll('script[type="application/ld+json"]');
@@ -216,6 +216,18 @@ JS_EXTRACT_ALL = """
         }
     }
 
+    // Fulfilled by: "Fulfilled by <seller>" text in product details
+    if (!result.fulfilled_by) {
+        for (const el of document.querySelectorAll('div, span')) {
+            const text = el.textContent.trim();
+            const m = text.match(/^Fulfilled by\s+(.+)$/i);
+            if (m && el.children.length === 0) {
+                result.fulfilled_by = m[1].trim();
+                break;
+            }
+        }
+    }
+
     return result;
 }
 """
@@ -336,6 +348,7 @@ async def scrape_flipkart(fsn: str, browser: Browser, proxy_manager: ProxyManage
             discount = data.get("discount") if data else None
             rating = data.get("rating") if data else None
             rating_count = data.get("rating_count") if data else None
+            fulfilled_by = data.get("fulfilled_by") if data else None
 
             # ── Fallback: regex on visible body text ────────────────────
             if not price:
@@ -361,8 +374,8 @@ async def scrape_flipkart(fsn: str, browser: Browser, proxy_manager: ProxyManage
             _cache_url(fsn, resolved_url)
 
             logger.info(
-                "Flipkart scraped FSN %s: price=%s, mrp=%s, discount=%s, rating=%s, count=%s",
-                fsn, price, mrp, discount, rating, rating_count,
+                "Flipkart scraped FSN %s: price=%s, mrp=%s, discount=%s, rating=%s, count=%s, fulfilled_by=%s",
+                fsn, price, mrp, discount, rating, rating_count, fulfilled_by,
             )
 
             return {
@@ -372,6 +385,7 @@ async def scrape_flipkart(fsn: str, browser: Browser, proxy_manager: ProxyManage
                 "discount": discount,
                 "rating": rating,
                 "rating_count": rating_count,
+                "fulfilled_by": fulfilled_by,
                 "status": "available",
                 "platform": "flipkart",
                 "url": resolved_url,

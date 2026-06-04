@@ -60,7 +60,7 @@ def format_update(res: dict) -> dict:
 
 
 def format_flipkart_update(res: dict) -> dict:
-    """Format a Flipkart scrape result into a sheet update dict (7 columns B–H)."""
+    """Format a Flipkart scrape result into a sheet update dict (8 columns B–I)."""
     return {
         "row": res["row"],
         "values": [
@@ -69,6 +69,7 @@ def format_flipkart_update(res: dict) -> dict:
             res.get("discount", ""),
             res.get("rating", ""),
             res.get("rating_count", ""),
+            res.get("fulfilled_by", ""),
             res.get("status", "unknown"),
             res.get("checked_at", ""),
         ],

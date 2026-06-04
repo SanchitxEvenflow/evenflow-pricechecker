@@ -29,7 +29,7 @@ interface CronStatus {
 }
 interface FlipkartScrapeResult {
   fsn: string; price?: string; mrp?: string; discount?: string;
-  rating?: string; rating_count?: string; status: string;
+  rating?: string; rating_count?: string; fulfilled_by?: string; status: string;
   url?: string; resolved_url?: string; checked_at?: string;
   progress?: number; total?: number; done?: boolean;
 }
@@ -860,9 +860,9 @@ function FlipkartPage({ t, dark }: { t: any; dark: boolean }) {
 
   const downloadCSV = () => {
     if (results.length === 0) return;
-    const headers = ["FSN", "Status", "Price", "MRP", "Discount", "Rating", "Rating Count", "URL"];
+    const headers = ["FSN", "Status", "Price", "MRP", "Discount", "Rating", "Rating Count", "Fulfilled By", "URL"];
     const rows = results.map(r => {
-      const row = [r.fsn, r.status, r.price || "", r.mrp || "", r.discount || "", r.rating || "", r.rating_count || "", r.url || ""];
+      const row = [r.fsn, r.status, r.price || "", r.mrp || "", r.discount || "", r.rating || "", r.rating_count || "", r.fulfilled_by || "", r.url || ""];
       return row.map(field => `"${String(field).replace(/"/g, '""')}"`).join(",");
     });
     const csvContent = [headers.join(","), ...rows].join("\n");
@@ -954,7 +954,7 @@ function FlipkartPage({ t, dark }: { t: any; dark: boolean }) {
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className={`border-b ${t.border} ${t.thead}`}>
-                  {["FSN", "Status", "Price", "MRP", "Discount", "Rating", "Rating Count", "URL"].map(h => (
+                  {["FSN", "Status", "Price", "MRP", "Discount", "Rating", "Rating Count", "Fulfilled By", "URL"].map(h => (
                     <th key={h} className={`px-4 py-4 text-xs font-semibold ${t.muted} uppercase tracking-wider`}>{h}</th>
                   ))}
                 </tr>
@@ -969,6 +969,7 @@ function FlipkartPage({ t, dark }: { t: any; dark: boolean }) {
                     <td className={`px-4 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.discount || "—"}</td>
                     <td className={`px-4 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.rating ? `${r.rating} ★` : "—"}</td>
                     <td className={`px-4 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.rating_count || "—"}</td>
+                    <td className={`px-4 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.fulfilled_by || "—"}</td>
                     <td className={`px-4 py-4 whitespace-nowrap text-sm`}>
                       {r.url ? <a href={r.url} target="_blank" rel="noopener noreferrer" className="text-[#2874F0] hover:underline truncate block max-w-[200px]">View ↗</a> : "—"}
                     </td>

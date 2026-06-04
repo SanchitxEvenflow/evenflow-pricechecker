@@ -85,6 +85,7 @@ class FlipkartResponse(BaseModel):
     discount: str | None = None
     rating: str | None = None
     rating_count: str | None = None
+    fulfilled_by: str | None = None
     status: str
     platform: str = "flipkart"
     url: str
