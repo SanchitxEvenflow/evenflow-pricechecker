@@ -509,7 +509,6 @@ function SchedulerPage({ t, dark }: { t: any; dark: boolean }) {
     } catch {}
   }, []);
 
-
   useEffect(() => {
     fetchCron(); fetchBlinkitCron(); fetchFlipkartCron(); fetchZeptoCron(); fetchLogs();
     const i1 = setInterval(fetchCron, 10000);
@@ -728,37 +727,7 @@ function SchedulerPage({ t, dark }: { t: any; dark: boolean }) {
         )}
       </div>
 
-      {/* Flipkart Manual Trigger Card */}
-      <div className={`${t.card} border ${t.border} rounded-2xl p-8 shadow-sm`}>
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <h2 className="text-2xl font-bold"><span className="text-[#2874F0]">flipkart</span> — Manual Trigger</h2>
-            <p className={`mt-1 text-sm ${t.muted}`}>Run a full scrape of all FSNs from the Flipkart Google Sheet. Results are written to a new tab: <code className={`text-xs px-1.5 py-0.5 rounded ${dark ? "bg-neutral-800" : "bg-neutral-100"}`}>Flipkart_Manual_YYYY-MM-DD_HH-MM</code></p>
-          </div>
-          <button
-            onClick={handleFlipkartTrigger}
-            disabled={isFlipkartTriggering || flipkartStatus?.is_running === true}
-            className="bg-[#2874F0] hover:bg-[#1a5dc8] text-white px-8 py-3 rounded-xl font-medium text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shrink-0"
-          >
-            {isFlipkartTriggering ? <><Spin /> Starting...</> : flipkartStatus?.is_running ? "Scrape Running..." : "Manual Trigger"}
-          </button>
-        </div>
-
-        {/* Flipkart Progress */}
-        {flipkartStatus?.is_running && flipkartStatus.progress != null && flipkartStatus.total != null && flipkartStatus.total > 0 && (
-          <div className="mt-6">
-            <div className="flex justify-between text-xs mb-2">
-              <span className={t.muted}>Progress</span>
-              <span className="text-blue-500 font-medium">{flipkartStatus.progress} / {flipkartStatus.total}</span>
-            </div>
-            <div className={`h-2.5 rounded-full overflow-hidden ${dark ? "bg-neutral-800" : "bg-neutral-200"}`}>
-              <div className="h-full bg-[#2874F0] rounded-full transition-all duration-500" style={{ width: `${Math.round((flipkartStatus.progress / flipkartStatus.total) * 100)}%` }} />
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Cron Status */}
+{/* Cron Status */}
       <div className={`${t.card} border ${t.border} rounded-2xl p-6 shadow-sm`}>
         <div className="flex items-center justify-between mb-3">
           <p className={`text-xs font-semibold uppercase tracking-wider ${t.muted}`}>Scheduler Status</p>
