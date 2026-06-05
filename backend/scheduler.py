@@ -105,7 +105,7 @@ async def _run_full_scrape(app, tab_prefix: str, run_type: str) -> None:
         try:
             chunk_results = await asyncio.gather(*[scrape_one(r) for r in chunk])
             updates = [_format_update(res) for res in chunk_results]
-            sheets_client.batch_update_rows(sheet_id, new_tab, updates)
+            await sheets_client.async_batch_update_rows(sheet_id, new_tab, updates)
             total_processed += len(chunk_results)
 
             # Count successes/failures
@@ -225,11 +225,12 @@ async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str) -> None:
             return result
 
     # Process one PID at a time — all 10 cities in parallel, then delay before next PID.
-    # This matches the SSE endpoint behaviour (which works) and avoids triggering rate limits
-    # that occur when all PID×city combinations are launched at once.
+    # Batch updates to sheets (max 100 per batch) to avoid N+1 API calls.
     total_done = 0
     total_success = 0
     total_failed = 0
+    batch_updates = []
+    BATCH_SIZE = 100  # Google Sheets API batch limit
 
     for i, pid in enumerate(pids):
         pid_tasks = [scrape_one_city(pid, loc) for loc in BLINKIT_LOCATIONS]
@@ -253,14 +254,23 @@ async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str) -> None:
         app.state.blinkit_cron_status["progress"] = total_done
         run_logger.update_progress(run_id, total_success, total_failed)
 
-        try:
-            sheets_client.batch_update_blinkit_rows(sheet_id, new_tab, [{
-                "row": i + 2,
-                "values": format_blinkit_row(results_by_city),
-            }])
-            logger.info("Blinkit: wrote row for PID %s (%d/%d)", pid, total_done, len(pids))
-        except Exception:
-            logger.exception("Blinkit: failed to write row for PID %s", pid)
+        # Collect update for batching
+        batch_updates.append({
+            "row": i + 2,
+            "values": format_blinkit_row(results_by_city),
+        })
+
+        # Flush batch if full or at end
+        should_flush = (len(batch_updates) == BATCH_SIZE) or (i == len(pids) - 1)
+        if should_flush:
+            try:
+                await sheets_client.async_batch_update_blinkit_rows(sheet_id, new_tab, batch_updates)
+                logger.info("Blinkit: wrote batch of %d rows (%d/%d total)", 
+                           len(batch_updates), total_done, len(pids))
+                batch_updates = []
+            except Exception:
+                logger.exception("Blinkit: failed to write batch at offset %d", i - len(batch_updates))
+                batch_updates = []
 
         if i < len(pids) - 1:
             delay = random.uniform(
@@ -372,6 +382,14 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str) -> None:
     total_success = 0
     total_failed = 0
 
+    # Process one PID at a time — all 9 cities in parallel, then delay before next PID.
+    # Batch updates to sheets (max 100 per batch) to avoid N+1 API calls.
+    total_done = 0
+    total_success = 0
+    total_failed = 0
+    batch_updates = []
+    BATCH_SIZE = 100  # Google Sheets API batch limit
+
     for i, pid in enumerate(pids):
         pid_tasks = [scrape_one_city(pid, loc) for loc in ZEPTO_LOCATIONS]
         city_results = await asyncio.gather(*pid_tasks, return_exceptions=True)
@@ -394,14 +412,23 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str) -> None:
         app.state.zepto_cron_status["progress"] = total_done
         run_logger.update_progress(run_id, total_success, total_failed)
 
-        try:
-            sheets_client.batch_update_zepto_rows(sheet_id, new_tab, [{
-                "row": i + 2,
-                "values": format_zepto_row(results_by_city),
-            }])
-            logger.info("Zepto: wrote row for PID %s (%d/%d)", pid, total_done, len(pids))
-        except Exception:
-            logger.exception("Zepto: failed to write row for PID %s", pid)
+        # Collect update for batching
+        batch_updates.append({
+            "row": i + 2,
+            "values": format_zepto_row(results_by_city),
+        })
+
+        # Flush batch if full or at end
+        should_flush = (len(batch_updates) == BATCH_SIZE) or (i == len(pids) - 1)
+        if should_flush:
+            try:
+                await sheets_client.async_batch_update_zepto_rows(sheet_id, new_tab, batch_updates)
+                logger.info("Zepto: wrote batch of %d rows (%d/%d total)", 
+                           len(batch_updates), total_done, len(pids))
+                batch_updates = []
+            except Exception:
+                logger.exception("Zepto: failed to write batch at offset %d", i - len(batch_updates))
+                batch_updates = []
 
         if i < len(pids) - 1:
             delay = random.uniform(

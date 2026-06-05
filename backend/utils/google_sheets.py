@@ -267,3 +267,28 @@ class GoogleSheetsClient:
             spreadsheetId=spreadsheet_id, body=body
         ).execute()
 
+    # ── Async wrappers (run sync calls in executor to avoid blocking event loop) ──
+
+    async def async_batch_update_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict]):
+        """Async wrapper for batch_update_rows — runs in thread executor."""
+        import asyncio
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.batch_update_rows, spreadsheet_id, tab_name, updates)
+
+    async def async_batch_update_blinkit_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict]):
+        """Async wrapper for batch_update_blinkit_rows — runs in thread executor."""
+        import asyncio
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.batch_update_blinkit_rows, spreadsheet_id, tab_name, updates)
+
+    async def async_batch_update_zepto_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict]):
+        """Async wrapper for batch_update_zepto_rows — runs in thread executor."""
+        import asyncio
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.batch_update_zepto_rows, spreadsheet_id, tab_name, updates)
+
+    async def async_batch_update_flipkart_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict]):
+        """Async wrapper for batch_update_flipkart_rows — runs in thread executor."""
+        import asyncio
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.batch_update_flipkart_rows, spreadsheet_id, tab_name, updates)

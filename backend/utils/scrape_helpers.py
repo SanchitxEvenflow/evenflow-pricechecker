@@ -1,7 +1,12 @@
 """Shared scraping constants and helpers used by both routes/sheets.py and scheduler.py."""
 
-# 3 concurrent Playwright sessions per proxy — raise to 40 if proxies hold, lower if blocks increase
-SCRAPE_CONCURRENCY = 30
+import os
+
+# Concurrency limit: tune based on available RAM (150MB per Playwright browser)
+# Default: 5 (safe for 2GB RAM). Raise to 10-15 if OOM doesn't occur, lower if it does.
+SCRAPE_CONCURRENCY = int(os.getenv("SCRAPE_CONCURRENCY", "5"))
+SHEETS_BATCH_SIZE = 100  # Google Sheets API batch limit
+SHEET_HEADER_ROWS = 1  # Number of header rows in sheets
 CHUNK_SIZE = 50
 
 # Canonical city order — must match blinkit/locations.py LOCATIONS list
@@ -37,10 +42,10 @@ def format_blinkit_row(results_by_city: dict) -> list:
         r = results_by_city.get(city, {})
         price = r.get("price")
         mrp = r.get("mrp")
-        status = r.get("status", "")
+        status = r.get("status") or ""
         values.extend([
-            str(price) if price is not None else "",
-            str(mrp) if mrp is not None else "",
+            f"{price:.2f}" if price is not None else "",
+            f"{mrp:.2f}" if mrp is not None else "",
             status,
         ])
     return values
@@ -49,17 +54,17 @@ def format_blinkit_row(results_by_city: dict) -> list:
 def format_zepto_row(results_by_city: dict) -> list:
     """Flatten per-city Zepto results into a single sheet row.
 
-    Returns a list of 30 values: [price, mrp, status] × 10 cities in ZEPTO_CITIES order.
+    Returns a list of 27 values: [price, mrp, status] × 9 cities in ZEPTO_CITIES order.
     """
     values = []
     for city in ZEPTO_CITIES:
         r = results_by_city.get(city, {})
         price = r.get("price")
         mrp = r.get("mrp")
-        status = r.get("status", "")
+        status = r.get("status") or ""
         values.extend([
-            str(price) if price is not None else "",
-            str(mrp) if mrp is not None else "",
+            f"{price:.2f}" if price is not None else "",
+            f"{mrp:.2f}" if mrp is not None else "",
             status,
         ])
     return values
