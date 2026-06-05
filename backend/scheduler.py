@@ -10,7 +10,19 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from functools import partial
 
-from utils.scrape_helpers import CHUNK_SIZE, SCRAPE_CONCURRENCY, format_update as _format_update, format_flipkart_update as _format_flipkart_update, BLINKIT_CITIES, format_blinkit_row, ZEPTO_CITIES, format_zepto_row
+from utils.scrape_helpers import (
+    CHUNK_SIZE,
+    SCRAPE_CONCURRENCY,
+    format_update as _format_update,
+    format_flipkart_update as _format_flipkart_update,
+    BLINKIT_CITIES,
+    format_blinkit_row,
+    ZEPTO_CITIES,
+    format_zepto_row,
+    INSTAMART_CITIES,
+    format_instamart_row,
+)
+
 from amazon.scraper import scrape_amazon
 from flipkart.scraper import scrape_flipkart
 from blinkit.scraper import fetch_blinkit_data
@@ -563,7 +575,190 @@ async def run_manual_zepto_trigger(app) -> None:
     await _run_full_zepto_scrape(app, tab_prefix="Zepto_Manual", run_type="zepto_manual")
 
 
+async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str) -> None:
+    """Core scrape logic for Instamart sheet-based runs.
+
+    Reads PIDs from INSTAMART_SHEET_ID / INSTAMART_SOURCE_TAB, scrapes each PID
+    across INSTAMART_CITIES, and writes a wide-format result tab.
+    """
+    sheets_client = GoogleSheetsClient()
+    sheet_id = os.getenv("INSTAMART_SHEET_ID", "")
+    source_tab = os.getenv("INSTAMART_SOURCE_TAB", "Sheet1")
+
+    if not sheet_id:
+        logger.error("Instamart: no sheet ID configured (set INSTAMART_SHEET_ID)")
+        return
+
+    run_start = datetime.now(IST)
+    logger.info(
+        "Instamart: starting %s scrape — sheet=%s source_tab=%s started_at=%s",
+        run_type,
+        sheet_id,
+        source_tab,
+        run_start.strftime("%H:%M:%S"),
+    )
+
+    try:
+        source_rows = sheets_client.get_asins_with_rows(sheet_id, source_tab)
+    except Exception:
+        logger.exception("Instamart: failed to read PIDs from source tab")
+        return
+
+    if not source_rows:
+        logger.warning("Instamart: no PIDs found in source tab '%s' — skipping", source_tab)
+        return
+
+    now = datetime.now(IST)
+    new_tab = f"{tab_prefix}_{now.strftime('%Y-%m-%d_%H-%M')}"
+    pids = [r["asin"] for r in source_rows]
+
+    run_id = run_logger.create_log(run_type, len(pids))
+
+    try:
+        sheets_client.create_tab(sheet_id, new_tab)
+        sheets_client.write_instamart_header_and_pids(sheet_id, new_tab, pids)
+        logger.info("Instamart: created tab '%s' with %d PIDs", new_tab, len(pids))
+    except Exception as e:
+        logger.exception("Instamart: failed to create result tab '%s'", new_tab)
+        app.state.instamart_cron_status.update({"is_running": False, "error": f"Failed to create tab '{new_tab}'"})
+        run_logger.fail_log(run_id, f"Failed to create tab '{new_tab}': {e}")
+        return
+
+    app.state.instamart_cron_status.update(
+        {
+            "is_running": True,
+            "last_run_at": run_start.isoformat(),
+            "last_run_tab": new_tab,
+            "progress": 0,
+            "total": len(pids),
+            "last_run_duration_seconds": None,
+            "last_run_processed": None,
+            "error": None,
+        }
+    )
+
+    # Import here to avoid circular imports / keep module load light.
+    from instamart.scraper import fetch_instamart_data
+
+    proxy_manager = app.state.proxy_manager
+
+    total_done = 0
+    total_success = 0
+    total_failed = 0
+    batch_updates = []
+    BATCH_SIZE = 100  # Google Sheets API batch limit
+
+    for i, pid in enumerate(pids):
+        # Scrape all cities for this PID in parallel.
+        pid_tasks = []
+        loop = asyncio.get_event_loop()
+        sem = asyncio.Semaphore(int(os.getenv("INSTAMART_CONCURRENCY", "5")))
+
+        async def scrape_one_city(pid_: str, loc: dict):
+            async with sem:
+                return await loop.run_in_executor(
+                    None,
+                    partial(
+                        fetch_instamart_data,
+                        item_id=pid_,
+                        lat=loc["lat"],
+                        lon=loc["lng"],
+                        city=loc["name"],
+                        store_id=loc.get("store_id", ""),
+                        address=loc.get("address", ""),
+                        pincode=loc.get("pincode"),
+                        proxy_manager=proxy_manager,
+                    ),
+                )
+
+        for loc in LOCATIONS:
+            pass
+
+        city_results = await asyncio.gather(
+
+            *[scrape_one_city(pid, loc) for loc in LOCATIONS],
+            return_exceptions=True,
+        )
+
+        results_by_city: dict = {}
+        for result in city_results:
+            if isinstance(result, Exception):
+                total_failed += 1
+                continue
+            city = result.get("city", "")
+            if city:
+                results_by_city[city] = result
+            status = result.get("status", "error")
+            if status == "error":
+                total_failed += 1
+            else:
+                total_success += 1
+
+        total_done += 1
+        app.state.instamart_cron_status["progress"] = total_done
+        run_logger.update_progress(run_id, total_success, total_failed)
+
+        batch_updates.append({
+            "row": i + 2,
+            "values": format_instamart_row(results_by_city),
+        })
+
+        # Flush batch to Sheets
+        should_flush = (len(batch_updates) == BATCH_SIZE) or (i == len(pids) - 1)
+        if should_flush:
+            try:
+                await sheets_client.async_batch_update_instamart_rows(sheet_id, new_tab, batch_updates)
+                logger.info(
+                    "Instamart: wrote batch of %d rows (%d/%d total)",
+                    len(batch_updates),
+                    total_done,
+                    len(pids),
+                )
+                batch_updates = []
+            except Exception:
+                logger.exception(
+                    "Instamart: failed to write batch at offset %d",
+                    i - len(batch_updates),
+                )
+                batch_updates = []
+
+        if i < len(pids) - 1:
+            delay = random.uniform(
+                float(os.getenv("INSTAMART_DELAY_MIN", "1.0")),
+                float(os.getenv("INSTAMART_DELAY_MAX", "3.0")),
+            )
+            await asyncio.sleep(delay)
+
+    elapsed = datetime.now(IST) - run_start
+    minutes, seconds = divmod(int(elapsed.total_seconds()), 60)
+    logger.info(
+        "Instamart: run complete — %d PIDs × %d cities | tab '%s' | time: %dm %ds",
+        len(pids),
+        len(LOCATIONS),
+        new_tab,
+        minutes,
+        seconds,
+    )
+
+    app.state.instamart_cron_status.update({
+        "is_running": False,
+        "last_run_duration_seconds": int(elapsed.total_seconds()),
+        "last_run_processed": len(pids),
+        "progress": len(pids),
+    })
+
+    run_logger.complete_log(run_id, total_success, total_failed, new_tab)
+
+
+async def run_manual_instamart_trigger(app) -> None:
+    """Called when user manually triggers the Instamart full scrape from the UI."""
+    await asyncio.sleep(0.1)
+    await _run_full_instamart_scrape(app, tab_prefix="Instamart_Manual", run_type="instamart_manual")
+
+
+
 async def _run_full_flipkart_scrape(app, tab_prefix: str, run_type: str) -> None:
+
     """Core scrape logic for Flipkart sheet-based runs.
 
     Reads FSNs from FLIPKART_SHEET_ID / FLIPKART_SOURCE_TAB, scrapes each FSN

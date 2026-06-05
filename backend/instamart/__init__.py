@@ -1,1 +1,2 @@
-# Instamart scraper module
+"""Instamart quick-commerce scraper."""
+
