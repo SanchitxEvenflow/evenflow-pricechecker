@@ -162,3 +162,34 @@ class ZeptoCityResult(BaseModel):
 
 class ZeptoResponse(ZeptoCityResult):
     pass
+
+
+# ── Instamart Models ──────────────────────────────────────────────────────
+
+class InstamartRequest(BaseModel):
+    product_id: str
+    city: str
+    # address is required by the scraper contract
+    address: str
+
+
+class InstamartAllCitiesRequest(BaseModel):
+    product_ids: list[str]
+
+
+class InstamartCityResult(BaseModel):
+    product_id: str
+    city: str
+    title: str | None = None
+    price: float | None = None
+    mrp: float | None = None
+    status: str
+    is_sold_out: bool = False
+    url: str
+    checked_at: str
+    error_message: str | None = None
+
+
+class InstamartResponse(InstamartCityResult):
+    pass
+

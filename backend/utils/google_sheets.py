@@ -275,6 +275,7 @@ class GoogleSheetsClient:
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self.batch_update_rows, spreadsheet_id, tab_name, updates)
 
+
     async def async_batch_update_blinkit_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict]):
         """Async wrapper for batch_update_blinkit_rows — runs in thread executor."""
         import asyncio
@@ -287,8 +288,78 @@ class GoogleSheetsClient:
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self.batch_update_zepto_rows, spreadsheet_id, tab_name, updates)
 
+    def write_instamart_header_and_pids(self, spreadsheet_id: str, tab_name: str, pids: list[str]) -> None:
+        """Write wide-format header + PID list to a newly created Instamart result tab.
+
+        Format matches Blinkit/Zepto:
+          PID | {City} Price | {City} MRP | {City} Status × 10 cities
+        Updates start at A1; PIDs are written to column A rows 2+.
+        """
+        if not self.service:
+            raise ValueError("Google Sheets service not initialized (missing credentials).")
+        from utils.scrape_helpers import INSTAMART_CITIES
+        city_cols = []
+        for city in INSTAMART_CITIES:
+            city_cols.extend([f"{city} Price", f"{city} MRP", f"{city} Status"])
+        header = ["PID"] + city_cols
+        rows: list[list[str]] = [header] + [[pid] for pid in pids]
+        self.service.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id,
+            range=f"{self._tab(tab_name)}!A1",
+            valueInputOption="USER_ENTERED",
+            body={"values": rows},
+        ).execute()
+
+    def batch_update_instamart_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict[str, Any]]):
+        """Batch-update Instamart result rows.
+
+        Each update: {"row": int, "values": [price, mrp, status] × 10 cities}
+        Updates columns B through AE (30 values per row).
+        """
+        if not self.service:
+            raise ValueError("Google Sheets service not initialized (missing credentials).")
+        data = []
+        for update in updates:
+            row = update["row"]
+            vals = update["values"]
+            data.append({
+                "range": f"{self._tab(tab_name)}!B{row}:AE{row}",
+                "values": [vals],
+            })
+        body = {"valueInputOption": "USER_ENTERED", "data": data}
+        return self.service.spreadsheets().values().batchUpdate(
+            spreadsheetId=spreadsheet_id, body=body
+        ).execute()
+
+    # ── Async wrappers (run sync calls in executor to avoid blocking event loop) ──
+
+    async def async_batch_update_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict]):
+        """Async wrapper for batch_update_rows — runs in thread executor."""
+        import asyncio
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.batch_update_rows, spreadsheet_id, tab_name, updates)
+
+    async def async_batch_update_blinkit_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict]):
+        """Async wrapper for batch_update_blinkit_rows — runs in thread executor."""
+        import asyncio
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.batch_update_blinkit_rows, spreadsheet_id, tab_name, updates)
+
+    async def async_batch_update_zepto_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict]):
+        """Async wrapper for batch_update_zepto_rows — runs in thread executor."""
+        import asyncio
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.batch_update_zepto_rows, spreadsheet_id, tab_name, updates)
+
+    async def async_batch_update_instamart_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict]):
+        """Async wrapper for batch_update_instamart_rows — runs in thread executor."""
+        import asyncio
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.batch_update_instamart_rows, spreadsheet_id, tab_name, updates)
+
     async def async_batch_update_flipkart_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict]):
         """Async wrapper for batch_update_flipkart_rows — runs in thread executor."""
         import asyncio
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self.batch_update_flipkart_rows, spreadsheet_id, tab_name, updates)
+

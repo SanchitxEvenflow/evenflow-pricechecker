@@ -1,0 +1,2 @@
+"""Instamart quick-commerce scraper."""
+
