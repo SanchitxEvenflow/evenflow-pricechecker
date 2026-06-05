@@ -143,6 +143,7 @@ function HomePage({ t, dark }: { t: any; dark: boolean }) {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ asins }),
       });
+      if (!res.ok) throw new Error(`Server returned ${res.status}: ${res.statusText}`);
       const reader = res.body?.getReader();
       if (!reader) throw new Error("No response stream");
       const decoder = new TextDecoder();
@@ -710,10 +711,11 @@ function SchedulerPage({ t, dark }: { t: any; dark: boolean }) {
                     <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${
                       log.type === "manual" ? "bg-purple-500/10 text-purple-500" :
                       log.type === "blinkit_manual" ? "bg-yellow-500/10 text-yellow-500" :
-                      log.type === "flipkart_manual" ? "bg-blue-500/10 text-blue-400" :
-                      "bg-blue-500/10 text-blue-500"
+                      log.type === "zepto_manual" ? "bg-pink-500/10 text-pink-500" :
+                      log.type === "flipkart_manual" ? "bg-blue-500/10 text-blue-500" :
+                      "bg-cyan-500/10 text-cyan-500"
                     }`}>
-                      {log.type === "manual" ? "Amazon" : log.type === "blinkit_manual" ? "Blinkit" : log.type === "flipkart_manual" ? "Flipkart" : log.type === "zepto_manual" ? "Zepto" : "Auto"}
+                      {log.type === "manual" ? "Amazon" : log.type === "blinkit_manual" ? "Blinkit" : log.type === "zepto_manual" ? "Zepto" : log.type === "flipkart_manual" ? "Flipkart" : "Auto"}
                     </span>
                   </td>
                   <td className={`px-6 py-3 whitespace-nowrap text-sm ${t.muted}`}>{fmtDate(log.triggered_at)}</td>
@@ -759,6 +761,7 @@ function BlinkitPage({ t, dark }: { t: any; dark: boolean }) {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ product_ids: ids }),
       });
+      if (!res.ok) throw new Error(`Server returned ${res.status}: ${res.statusText}`);
       const reader = res.body?.getReader();
       if (!reader) throw new Error("No stream");
       const decoder = new TextDecoder();
@@ -1162,6 +1165,7 @@ function FlipkartPage({ t, dark }: { t: any; dark: boolean }) {
         body: JSON.stringify({ fsns }),
 
       });
+      if (!res.ok) throw new Error(`Server returned ${res.status}: ${res.statusText}`);
 
       const reader = res.body?.getReader();
 

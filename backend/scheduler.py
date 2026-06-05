@@ -210,7 +210,6 @@ async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str) -> None:
 
     async def scrape_one_city(pid: str, loc: dict) -> dict:
         async with sem:
-            proxy = proxy_manager.get_proxy()
             result = await loop.run_in_executor(
                 None,
                 partial(
@@ -220,13 +219,9 @@ async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str) -> None:
                     lat=loc["lat"],
                     lon=loc["lng"],
                     city=loc["name"],
-                    proxy=proxy,
+                    proxy_manager=proxy_manager,
                 ),
             )
-            if result.get("status") == "error":
-                proxy_manager.report_failure(proxy)
-            else:
-                proxy_manager.report_success(proxy)
             return result
 
     # Process one PID at a time — all 10 cities in parallel, then delay before next PID.

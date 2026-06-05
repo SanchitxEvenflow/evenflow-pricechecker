@@ -60,9 +60,24 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: init ProxyManager + launch Playwright browser. Shutdown: close browser."""
     # ── Startup ──
     logger.info("Starting Price Checker service...")
+
+    """Startup: init ProxyManager + launch Playwright browser. Shutdown: close browser."""
+    # Monkey-patch IocpProactor.accept to prevent WinError 87 from killing the accept loop
+    if sys.platform == "win32":
+        import asyncio.windows_events
+        _orig_accept = asyncio.windows_events.IocpProactor.accept
+        def _patched_accept(self, listener):
+            try:
+                return _orig_accept(self, listener)
+            except OSError as exc:
+                if getattr(exc, "winerror", None) == 87:
+                    logger.warning("Caught WinError 87 in accept(), faking ECONNABORTED to keep loop alive.")
+                    # ECONNABORTED (10053) is caught and ignored by the loop, keeping it alive
+                    raise OSError(0, "Connection aborted", None, 10053) from exc
+                raise
+        asyncio.windows_events.IocpProactor.accept = _patched_accept
 
     # Initialize proxy manager
     proxy_file = os.getenv("PROXY_FILE", "proxies.txt")
