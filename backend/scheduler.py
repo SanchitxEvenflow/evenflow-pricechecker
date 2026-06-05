@@ -640,7 +640,7 @@ async def _run_full_flipkart_scrape(app, tab_prefix: str, run_type: str) -> None
         try:
             chunk_results = await asyncio.gather(*[scrape_one(r) for r in chunk])
             updates = [_format_flipkart_update(res) for res in chunk_results]
-            sheets_client.batch_update_flipkart_rows(sheet_id, new_tab, updates)
+            await sheets_client.async_batch_update_flipkart_rows(sheet_id, new_tab, updates)
             total_processed += len(chunk_results)
 
             for res in chunk_results:
