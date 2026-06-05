@@ -1,5 +1,16 @@
 [
   {
+    "run_id": "e4822782",
+    "type": "flipkart_manual",
+    "triggered_at": "2026-06-05T10:09:59.744369+05:30",
+    "completed_at": null,
+    "total_asins": 256,
+    "success_count": 100,
+    "failed_count": 0,
+    "sheet_tab": null,
+    "status": "in_progress"
+  },
+  {
     "run_id": "89713d23",
     "type": "manual",
     "triggered_at": "2026-06-05T09:04:19.014215+05:30",

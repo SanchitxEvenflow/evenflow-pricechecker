@@ -379,7 +379,7 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
         "platform": "amazon", "url": url,
     }
 
-    max_proxy_attempts = min(5, len(proxy_manager.active_pool) or 1)
+    max_proxy_attempts = min(3, len(proxy_manager.active_pool) or 1)
     context = None
 
     for attempt in range(max_proxy_attempts + 1):  # +1 = direct-connection fallback

@@ -175,13 +175,13 @@ def fetch_zepto_data(
         print(f"[Zepto] {city}: SKIPPED -- store_id not configured in locations.py")
         return _error_result("missing_store_id")
 
-    max_proxy_attempts = min(5, len(proxy_manager.active_pool) if proxy_manager else 0)
+    max_proxy_attempts = min(3, len(proxy_manager.active_pool) if proxy_manager else 0)
 
     for attempt in range(max_proxy_attempts + 1):  # +1 = direct-connection fallback
         proxy = None
         if attempt < max_proxy_attempts and proxy_manager:
             proxy = proxy_manager.get_proxy()
-        else:
+        elif attempt == max_proxy_attempts:
             print(f"[Zepto] {city}: trying direct connection (attempt {attempt + 1})")
 
         proxies = {"http": proxy, "https": proxy} if proxy else None
@@ -227,7 +227,7 @@ def fetch_zepto_data(
 
             if response.status_code in (401, 403, 451):
                 logger.warning("Blocked (HTTP %d) for item_id=%s city=%s", response.status_code, item_id, city)
-                if proxy_manager and proxy:
+                if proxy_manager:
                     proxy_manager.report_failure(proxy)
                 if attempt < max_proxy_attempts:
                     continue
@@ -235,7 +235,7 @@ def fetch_zepto_data(
 
             if response.status_code == 404:
                 logger.warning("Item %s not found/unserviceable in %s", item_id, city)
-                if proxy_manager and proxy:
+                if proxy_manager:
                     proxy_manager.report_success(proxy)
                 return {
                     "product_id": item_id,
@@ -252,7 +252,7 @@ def fetch_zepto_data(
             if response.status_code != 200:
                 logger.error("Zepto returned status %d for item_id=%s city=%s", response.status_code, item_id, city)
                 print(f"[Zepto] {city}: Response snippet: {response.text[:300]}")
-                if proxy_manager and proxy:
+                if proxy_manager:
                     proxy_manager.report_failure(proxy)
                 if attempt < max_proxy_attempts:
                     continue
@@ -286,7 +286,7 @@ def fetch_zepto_data(
         except (RequestsError, TimeoutError) as e:
             logger.error("Network/timeout error on attempt %d for item_id=%s: %s", attempt + 1, item_id, e)
             print(f"[Zepto] {city}: NETWORK ERROR (attempt {attempt + 1}): {e}")
-            if proxy_manager and proxy:
+            if proxy_manager:
                 proxy_manager.report_failure(proxy)
             if attempt < max_proxy_attempts:
                 continue
@@ -298,7 +298,7 @@ def fetch_zepto_data(
                 text = response.text.lower()
                 if "cloudflare" in text or "<html" in text:
                     logger.error("Cloudflare challenge detected -- rotate proxies")
-                    if proxy_manager and proxy:
+                    if proxy_manager:
                         proxy_manager.report_failure(proxy)
                     if attempt < max_proxy_attempts:
                         continue
@@ -307,7 +307,7 @@ def fetch_zepto_data(
         except Exception as e:
             logger.error("Unexpected error on attempt %d for item_id=%s: %s", attempt + 1, item_id, e)
             print(f"[Zepto] {city}: UNEXPECTED ERROR (attempt {attempt + 1}): {e}")
-            if proxy_manager and proxy:
+            if proxy_manager:
                 proxy_manager.report_failure(proxy)
             if attempt < max_proxy_attempts:
                 continue
