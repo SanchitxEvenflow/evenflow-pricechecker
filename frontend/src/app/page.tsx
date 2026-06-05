@@ -139,10 +139,11 @@ function HomePage({ t, dark }: { t: any; dark: boolean }) {
     setStats({ total: asins.length, processed: 0, remaining: asins.length, success: 0, failed: 0 });
 
     try {
-      const res = await fetch(`${API}/api/scrape-manual`, {
+      const res = await fetch(`${API}/api/amazon/scrape-manual`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ asins }),
       });
+      if (!res.ok) throw new Error(`Server returned ${res.status}: ${res.statusText}`);
       const reader = res.body?.getReader();
       if (!reader) throw new Error("No response stream");
       const decoder = new TextDecoder();
@@ -354,7 +355,7 @@ function SchedulerPage({ t, dark }: { t: any; dark: boolean }) {
 
   const fetchLogs = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/sheets/api/logs`);
+      const res = await fetch(`${API}/sheets/amazon/api/logs`);
       const data = await res.json();
       if (data.logs) setLogs(data.logs);
     } catch {}
@@ -362,7 +363,7 @@ function SchedulerPage({ t, dark }: { t: any; dark: boolean }) {
 
   const fetchCron = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/sheets/cron-status`);
+      const res = await fetch(`${API}/sheets/amazon/cron-status`);
       if (res.ok) setCronStatus(await res.json());
     } catch {}
   }, []);
@@ -402,7 +403,7 @@ function SchedulerPage({ t, dark }: { t: any; dark: boolean }) {
     setIsTriggering(true);
     setToast(null);
     try {
-      const res = await fetch(`${API}/sheets/api/trigger-manual-scheduler`, { method: "POST" });
+      const res = await fetch(`${API}/sheets/amazon/api/trigger-manual-scheduler`, { method: "POST" });
       if (res.ok) {
         setToast({ type: "success", msg: "Amazon manual scrape triggered! Check progress below." });
         setTimeout(fetchLogs, 2000);
@@ -646,9 +647,11 @@ function SchedulerPage({ t, dark }: { t: any; dark: boolean }) {
                     <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${
                       log.type === "manual" ? "bg-purple-500/10 text-purple-500" :
                       log.type === "blinkit_manual" ? "bg-yellow-500/10 text-yellow-500" :
-                      "bg-blue-500/10 text-blue-500"
+                      log.type === "zepto_manual" ? "bg-pink-500/10 text-pink-500" :
+                      log.type === "flipkart_manual" ? "bg-blue-500/10 text-blue-500" :
+                      "bg-cyan-500/10 text-cyan-500"
                     }`}>
-                      {log.type === "manual" ? "Amazon" : log.type === "blinkit_manual" ? "Blinkit" : log.type === "zepto_manual" ? "Zepto" : "Auto"}
+                      {log.type === "manual" ? "Amazon" : log.type === "blinkit_manual" ? "Blinkit" : log.type === "zepto_manual" ? "Zepto" : log.type === "flipkart_manual" ? "Flipkart" : "Auto"}
                     </span>
                   </td>
                   <td className={`px-6 py-3 whitespace-nowrap text-sm ${t.muted}`}>{fmtDate(log.triggered_at)}</td>
@@ -694,6 +697,7 @@ function BlinkitPage({ t, dark }: { t: any; dark: boolean }) {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ product_ids: ids }),
       });
+      if (!res.ok) throw new Error(`Server returned ${res.status}: ${res.statusText}`);
       const reader = res.body?.getReader();
       if (!reader) throw new Error("No stream");
       const decoder = new TextDecoder();
@@ -1097,6 +1101,7 @@ function FlipkartPage({ t, dark }: { t: any; dark: boolean }) {
         body: JSON.stringify({ fsns }),
 
       });
+      if (!res.ok) throw new Error(`Server returned ${res.status}: ${res.statusText}`);
 
       const reader = res.body?.getReader();
 
