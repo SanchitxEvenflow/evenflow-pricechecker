@@ -28,3 +28,6 @@ Thumbs.db
 proxies.txt
 
 test_zepto.py
+backend/debug_flipkart/
+backend/artifacts/
+backend/scraper_logs.json
