@@ -45,8 +45,9 @@ Object.defineProperty(navigator, 'languages', { get: () => ['en-IN', 'en-US', 'e
 window.chrome = { runtime: {} };
 """
 
-# ── In-memory URL cache ─────────────────────────────────────────────────────
+# ── In-memory URL cache with size limit ─────────────────────────────────────
 _resolved_url_cache: dict[str, str] = {}
+_CACHE_MAX_SIZE = 10000  # Prevents unbounded memory growth (~50MB at max)
 
 
 def _build_fsn_url(fsn: str) -> str:
@@ -59,6 +60,17 @@ def _get_cached_url(fsn: str) -> str | None:
 
 
 def _cache_url(fsn: str, resolved_url: str) -> None:
+    """Cache resolved URL for FSN with size limit to prevent memory leaks."""
+    global _resolved_url_cache
+    
+    # Evict 10% of oldest entries if cache exceeds max size
+    if len(_resolved_url_cache) >= _CACHE_MAX_SIZE:
+        evict_count = _CACHE_MAX_SIZE // 10
+        old_keys = list(_resolved_url_cache.keys())[:evict_count]
+        for key in old_keys:
+            del _resolved_url_cache[key]
+        logger.debug("Cache evicted %d entries (cache size: %d)", evict_count, len(_resolved_url_cache))
+    
     _resolved_url_cache[fsn] = resolved_url
     logger.debug("Cached resolved URL for FSN %s: %s", fsn, resolved_url)
 

@@ -20,6 +20,8 @@ class ProxyManager:
         self.dead_pool: dict[str, float] = {}  # proxy → timestamp when it died
         self.failure_count: dict[str, int] = {}
         self.index: int = 0
+        self._last_revive_check: float = time.time()  # Throttle revival checks
+        self._revive_check_interval: float = 30.0  # Check every 30 seconds
 
         self._load_proxies(proxy_file)
 
@@ -87,7 +89,11 @@ class ProxyManager:
     def get_proxy(self) -> str | None:
         """Return next proxy via round-robin, or None if pool is empty."""
         with self._lock:
-            self._revive_dead_proxies()
+            # Only check for revival every 30 seconds (not on every call)
+            now = time.time()
+            if now - self._last_revive_check > self._revive_check_interval:
+                self._revive_dead_proxies()
+                self._last_revive_check = now
 
             if not self.active_pool:
                 logger.warning("Proxy pool is empty — caller should make direct request")
