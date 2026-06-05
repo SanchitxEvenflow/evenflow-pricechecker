@@ -395,6 +395,7 @@ function SchedulerPage({ t, dark }: { t: any; dark: boolean }) {
     } catch {}
   }, []);
 
+
   useEffect(() => {
     fetchCron(); fetchBlinkitCron(); fetchFlipkartCron(); fetchZeptoCron(); fetchLogs();
     const i1 = setInterval(fetchCron, 10000);
@@ -612,7 +613,8 @@ function SchedulerPage({ t, dark }: { t: any; dark: boolean }) {
           </div>
         )}
       </div>
-{/* Cron Status */}
+
+{/* Cron Status */}
       <div className={`${t.card} border ${t.border} rounded-2xl p-6 shadow-sm`}>
         <div className="flex items-center justify-between mb-3">
           <p className={`text-xs font-semibold uppercase tracking-wider ${t.muted}`}>Scheduler Status</p>
@@ -1048,6 +1050,94 @@ function ZeptoPage({ t, dark }: { t: any; dark: boolean }) {
 }
 
 
+// ═══════════════════════════════════════════════════════════════════════════
+// FLIPKART PAGE — Manual FSN Scraping
+// ═══════════════════════════════════════════════════════════════════════════
+function FlipkartPage({ t, dark }: { t: any; dark: boolean }) {
+  const [fsnText, setFsnText] = useState("");
+  const [results, setResults] = useState<FlipkartScrapeResult[]>([]);
+  const [isScraping, setIsScraping] = useState(false);
+  const [error, setError] = useState("");
+  const [stats, setStats] = useState({ total: 0, processed: 0, remaining: 0, success: 0, failed: 0 });
+
+  const parseFsns = (text: string) => {
+    const raw = text.split(/[\n,]+/).map(a => a.trim()).filter(Boolean);
+    const seen = new Set<string>();
+    return raw.filter(a => { if (seen.has(a)) return false; seen.add(a); return true; });
+  };
+
+  const handleScrape = async () => {
+    const fsns = parseFsns(fsnText);
+    if (fsns.length === 0) { setError("Please enter at least one FSN"); return; }
+    setError("");
+    setIsScraping(true);
+    setResults(fsns.map(f => ({ fsn: f, status: "pending" })));
+    setStats({ total: fsns.length, processed: 0, remaining: fsns.length, success: 0, failed: 0 });
+
+    try {
+      const res = await fetch(`${API}/api/flipkart/scrape-manual`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fsns }),
+      });
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No response stream");
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let suc = 0, fail = 0;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const data = JSON.parse(line.slice(6));
+          if (data.done) continue;
+
+          const st = data.status || "error";
+          if (["error", "not_found", "blocked", "unavailable"].includes(st)) fail++; else suc++;
+
+          setResults(prev => prev.map(r => r.fsn === data.fsn ? { ...r, ...data, status: st } : r));
+          setStats({ total: fsns.length, processed: suc + fail, remaining: fsns.length - suc - fail, success: suc, failed: fail });
+        }
+      }
+    } catch (e: any) {
+      setError("Scrape failed: " + e.message);
+    } finally {
+      setIsScraping(false);
+    }
+  };
+
+  const downloadCSV = () => {
+    if (results.length === 0) return;
+    const headers = ["FSN", "Status", "Price", "MRP", "Discount", "Rating", "Rating Count", "Fulfilled By", "URL"];
+    const rows = results.map(r => {
+      const row = [r.fsn, r.status, r.price || "", r.mrp || "", r.discount || "", r.rating || "", r.rating_count || "", r.fulfilled_by || "", r.url || ""];
+      return row.map(field => `"${String(field).replace(/"/g, '""')}"`).join(",");
+    });
+    const csvContent = [headers.join(","), ...rows].join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", `flipkart_scrape_${new Date().toISOString().slice(0,10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  return (
+    <main className="max-w-6xl mx-auto px-6 py-8 space-y-8">
+      {error && (
+        <div className="p-4 bg-red-500/10 border border-red-500/30 text-red-500 rounded-xl text-sm font-medium flex items-center">
+          <svg className="w-5 h-5 mr-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          {error}
+        </div>
+
+
 
 // ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
 
@@ -1253,7 +1343,6 @@ export default function App() {
       else if (h === "#/flipkart") setPage("flipkart");
       else if (h === "#/blinkit") setPage("blinkit");
       else if (h === "#/zepto") setPage("zepto");
-      else if (h === "#/flipkart") setPage("flipkart");
       else setPage("home");
     };
     onHash();
