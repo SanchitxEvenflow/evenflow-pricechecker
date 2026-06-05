@@ -248,20 +248,26 @@ async def scrape_flipkart(fsn: str, browser: Browser, proxy_manager: ProxyManage
     fsn_url = _build_fsn_url(fsn)
     start_url = cached_url if cached_url else fsn_url
 
-    for attempt in range(2):
+    max_proxy_attempts = min(3, len(proxy_manager.active_pool) or 1)
+
+    for attempt in range(max_proxy_attempts + 1):  # +1 = direct-connection fallback
         context = None
         try:
             # ── Delay ───────────────────────────────────────────────────
             delay = random.uniform(DELAY_MIN, DELAY_MAX)
             logger.info(
-                "Flipkart scrape attempt %d for FSN %s — waiting %.1fs (using %s)",
-                attempt + 1, fsn, delay,
+                "Flipkart scrape attempt %d/%d for FSN %s — waiting %.1fs (using %s)",
+                attempt + 1, max_proxy_attempts + 1, fsn, delay,
                 "cached URL" if cached_url and start_url == cached_url else "FSN bridge URL",
             )
             await asyncio.sleep(delay)
 
             # ── Browser context setup ───────────────────────────────────
-            proxy = proxy_manager.get_proxy()
+            proxy = None
+            if attempt == max_proxy_attempts:
+                logger.info("All proxies exhausted — trying direct connection for FSN %s", fsn)
+            else:
+                proxy = proxy_manager.get_proxy()
             user_agent = random.choice(UA_POOL)
 
             context_opts: dict = {
@@ -310,7 +316,7 @@ async def scrape_flipkart(fsn: str, browser: Browser, proxy_manager: ProxyManage
             # Check: overloaded
             if "site is overloaded" in body_lower:
                 proxy_manager.report_failure(proxy)
-                if attempt == 0:
+                if attempt < max_proxy_attempts:
                     logger.warning("Flipkart overloaded for FSN %s — retrying in 10s", fsn)
                     await _safe_close_context(context)
                     context = None
@@ -321,7 +327,7 @@ async def scrape_flipkart(fsn: str, browser: Browser, proxy_manager: ProxyManage
             # Check: blocked / captcha
             if "access denied" in body_lower or "captcha" in body_lower:
                 proxy_manager.report_failure(proxy)
-                if attempt == 0:
+                if attempt < max_proxy_attempts:
                     logger.warning("Flipkart blocked for FSN %s — retrying in 10s", fsn)
                     await _safe_close_context(context)
                     context = None
@@ -395,7 +401,7 @@ async def scrape_flipkart(fsn: str, browser: Browser, proxy_manager: ProxyManage
 
         except Exception as e:
             logger.exception("Flipkart scrape error for FSN %s (attempt %d): %s", fsn, attempt + 1, str(e))
-            if attempt == 0:
+            if attempt < max_proxy_attempts:
                 await _safe_close_context(context)
                 context = None
                 if cached_url:

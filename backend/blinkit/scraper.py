@@ -246,7 +246,7 @@ def fetch_blinkit_data(
 
     logger.info("POSTing to Blinkit for item_id=%s, city=%s (%s, %s)", item_id, city, lat, lon)
 
-    max_proxy_attempts = min(5, len(proxy_manager.active_pool) if proxy_manager else 0)
+    max_proxy_attempts = min(3, len(proxy_manager.active_pool) if proxy_manager else 0)
 
     for attempt in range(max_proxy_attempts + 1):  # +1 = direct-connection fallback
         proxy = None
