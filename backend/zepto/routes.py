@@ -99,19 +99,23 @@ async def check_zepto_all_cities(body: ZeptoAllCitiesRequest, request: Request):
         tasks = [asyncio.create_task(worker(pid, loc)) for pid, loc in work_items]
         done = 0
 
-        while done < total:
-            result = await queue.get()
-            done += 1
-            payload = json.dumps({
-                **result,
-                "progress": done,
-                "total": total,
-            })
-            yield f"data: {payload}\n\n"
+        try:
+            while done < total:
+                result = await queue.get()
+                done += 1
+                payload = json.dumps({
+                    **result,
+                    "progress": done,
+                    "total": total,
+                })
+                yield f"data: {payload}\n\n"
 
-        # Ensure all tasks are finished
-        await asyncio.gather(*tasks, return_exceptions=True)
-        yield f"data: {json.dumps({'done': True, 'total': total})}\n\n"
+            await asyncio.gather(*tasks, return_exceptions=True)
+            yield f"data: {json.dumps({'done': True, 'total': total})}\n\n"
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
