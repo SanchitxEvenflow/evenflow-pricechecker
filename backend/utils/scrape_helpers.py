@@ -23,7 +23,7 @@ ZEPTO_CITIES = [
 # Canonical city order — must match instamart/locations.py coverage.
 INSTAMART_CITIES = [
     "Bangalore", "NCR", "Mumbai", "Hyderabad", "Kolkata",
-    "Pune", "Ahmedabad", "Chennai", "Patna", "Dehradun",
+    "Pune", "Ahmedabad", "Chennai",
 ]
 
 

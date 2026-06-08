@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 
 from instamart.locations import LOCATIONS, LOCATIONS_BY_CITY, CITY_NAMES
 from instamart.scraper import fetch_instamart_data
-from schemas.price import instamartRequest, instamartAllCitiesRequest, instamartResponse
+from schemas.price import InstamartRequest, InstamartAllCitiesRequest, InstamartResponse
 
 logger = logging.getLogger(__name__)
 
@@ -19,8 +19,8 @@ router = APIRouter(tags=["instamart"])
 
 # ── Single city lookup ──────────────────────────────────────────────────────
 
-@router.post("/instamart", response_model=instamartResponse)
-async def check_instamart_price(body: instamartRequest, request: Request):
+@router.post("/instamart", response_model=InstamartResponse)
+async def check_instamart_price(body: InstamartRequest, request: Request):
     """Scrape instamart for a single product in a single city."""
     city_data = LOCATIONS_BY_CITY.get(body.city)
     if not city_data:
@@ -46,22 +46,22 @@ async def check_instamart_price(body: instamartRequest, request: Request):
         ),
     )
 
-    return instamartResponse(**result)
+    return InstamartResponse(**result)
 
 
 # ── All cities SSE stream ──────────────────────────────────────────────────
 
-instamart_CONCURRENCY = 5  # instamart rate-limits aggressively
+INSTAMART_CONCURRENCY = 5  # instamart rate-limits aggressively
 
 
 @router.post("/instamart/all-cities")
-async def check_instamart_all_cities(body: instamartAllCitiesRequest, request: Request):
+async def check_instamart_all_cities(body: InstamartAllCitiesRequest, request: Request):
     """
     Scrape instamart for one or more product IDs across all 10 cities.
     Results are streamed as SSE events as they complete.
     """
     proxy_manager = request.app.state.proxy_manager
-    sem = asyncio.Semaphore(instamart_CONCURRENCY)
+    sem = asyncio.Semaphore(INSTAMART_CONCURRENCY)
     queue: asyncio.Queue = asyncio.Queue()
 
     # Build work items: (product_id, city_data)

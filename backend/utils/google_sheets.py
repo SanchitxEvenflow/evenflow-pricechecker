@@ -313,8 +313,8 @@ class GoogleSheetsClient:
     def batch_update_instamart_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict[str, Any]]):
         """Batch-update Instamart result rows.
 
-        Each update: {"row": int, "values": [price, mrp, status] × 10 cities}
-        Updates columns B through AE (30 values per row).
+        Each update: {"row": int, "values": [price, mrp, status] × 8 cities}
+        Updates columns B through Y (24 values per row).
         """
         if not self.service:
             raise ValueError("Google Sheets service not initialized (missing credentials).")
@@ -323,7 +323,7 @@ class GoogleSheetsClient:
             row = update["row"]
             vals = update["values"]
             data.append({
-                "range": f"{self._tab(tab_name)}!B{row}:AE{row}",
+                "range": f"{self._tab(tab_name)}!B{row}:Y{row}",
                 "values": [vals],
             })
         body = {"valueInputOption": "USER_ENTERED", "data": data}
