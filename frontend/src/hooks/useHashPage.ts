@@ -13,6 +13,7 @@ export function useHashPage() {
       else if (h === "#/flipkart") setPage("flipkart");
       else if (h === "#/blinkit") setPage("blinkit");
       else if (h === "#/zepto") setPage("zepto");
+      else if (h === "#/instamart") setPage("instamart");
       else setPage("home");
     };
     onHash();

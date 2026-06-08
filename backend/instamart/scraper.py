@@ -53,7 +53,7 @@ def fetch_instamart_data(
         print(f"[Instamart] {city}: ACQUIRED LOCK, scraping item={item_id}")
         try:
             with sync_playwright() as p:
-                browser = p.chromium.launch(headless=False)
+                browser = p.chromium.launch(headless=True)
                 context = browser.new_context()
                 
                 # Inject the cookies for the target city

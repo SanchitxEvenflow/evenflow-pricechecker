@@ -10,10 +10,12 @@ export function useSchedulerData() {
   const [blinkitStatus, setBlinkitStatus] = useState<CronStatus | null>(null);
   const [flipkartStatus, setFlipkartStatus] = useState<CronStatus | null>(null);
   const [zeptoStatus, setZeptoStatus] = useState<CronStatus | null>(null);
+  const [instamartStatus, setInstamartStatus] = useState<CronStatus | null>(null);
   const [isTriggering, setIsTriggering] = useState(false);
   const [isBlinkitTriggering, setIsBlinkitTriggering] = useState(false);
   const [isFlipkartTriggering, setIsFlipkartTriggering] = useState(false);
   const [isZeptoTriggering, setIsZeptoTriggering] = useState(false);
+  const [isInstamartTriggering, setIsInstamartTriggering] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [toast, setToast] = useState<SchedulerToast | null>(null);
 
@@ -53,15 +55,23 @@ export function useSchedulerData() {
     } catch {}
   }, []);
 
+  const fetchInstamartCron = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/price/instamart/cron-status`);
+      if (res.ok) setInstamartStatus(await res.json());
+    } catch {}
+  }, []);
+
   useEffect(() => {
-    const initial = setTimeout(() => { fetchCron(); fetchBlinkitCron(); fetchFlipkartCron(); fetchZeptoCron(); fetchLogs(); }, 0);
+    const initial = setTimeout(() => { fetchCron(); fetchBlinkitCron(); fetchFlipkartCron(); fetchZeptoCron(); fetchInstamartCron(); fetchLogs(); }, 0);
     const i1 = setInterval(fetchCron, 10000);
     const i2 = setInterval(fetchLogs, 30000);
     const i3 = setInterval(fetchBlinkitCron, 10000);
     const i4 = setInterval(fetchFlipkartCron, 10000);
     const i5 = setInterval(fetchZeptoCron, 10000);
-    return () => { clearTimeout(initial); clearInterval(i1); clearInterval(i2); clearInterval(i3); clearInterval(i4); clearInterval(i5); };
-  }, [fetchCron, fetchBlinkitCron, fetchFlipkartCron, fetchZeptoCron, fetchLogs]);
+    const i6 = setInterval(fetchInstamartCron, 10000);
+    return () => { clearTimeout(initial); clearInterval(i1); clearInterval(i2); clearInterval(i3); clearInterval(i4); clearInterval(i5); clearInterval(i6); };
+  }, [fetchCron, fetchBlinkitCron, fetchFlipkartCron, fetchZeptoCron, fetchInstamartCron, fetchLogs]);
 
   const handleTrigger = async () => {
     setIsTriggering(true);
@@ -139,15 +149,36 @@ export function useSchedulerData() {
     }
   };
 
+  const handleInstamartTrigger = async () => {
+    setIsInstamartTriggering(true);
+    setToast(null);
+    try {
+      const res = await fetch(`${API}/price/instamart/api/trigger-manual-scheduler`, { method: "POST" });
+      if (res.ok) {
+        setToast({ type: "success", msg: "Instamart manual scrape triggered! Check progress below." });
+        setTimeout(fetchLogs, 2000);
+      } else {
+        const data = await res.json();
+        setToast({ type: "error", msg: data.detail || "Failed to trigger Instamart scrape" });
+      }
+    } catch (e: unknown) {
+      setToast({ type: "error", msg: errorMessage(e) });
+    } finally {
+      setIsInstamartTriggering(false);
+    }
+  };
+
   return {
     cronStatus,
     blinkitStatus,
     flipkartStatus,
     zeptoStatus,
+    instamartStatus,
     isTriggering,
     isBlinkitTriggering,
     isFlipkartTriggering,
     isZeptoTriggering,
+    isInstamartTriggering,
     logs,
     toast,
     setToast,
@@ -156,5 +187,6 @@ export function useSchedulerData() {
     handleBlinkitTrigger,
     handleFlipkartTrigger,
     handleZeptoTrigger,
+    handleInstamartTrigger,
   };
 }

@@ -27,10 +27,11 @@ export function RunHistoryTable({ t, logs, onRefresh, formatDate }: { t: ThemeCl
                     log.type === "manual" ? "bg-purple-500/10 text-purple-500" :
                     log.type === "blinkit_manual" ? "bg-yellow-500/10 text-yellow-500" :
                     log.type === "zepto_manual" ? "bg-pink-500/10 text-pink-500" :
+                    log.type === "instamart_manual" ? "bg-orange-500/10 text-orange-500" :
                     log.type === "flipkart_manual" ? "bg-blue-500/10 text-blue-500" :
                     "bg-cyan-500/10 text-cyan-500"
                   }`}>
-                    {log.type === "manual" ? "Amazon" : log.type === "blinkit_manual" ? "Blinkit" : log.type === "zepto_manual" ? "Zepto" : log.type === "flipkart_manual" ? "Flipkart" : "Auto"}
+                    {log.type === "manual" ? "Amazon" : log.type === "blinkit_manual" ? "Blinkit" : log.type === "zepto_manual" ? "Zepto" : log.type === "instamart_manual" ? "Instamart" : log.type === "flipkart_manual" ? "Flipkart" : "Auto"}
                   </span>
                 </td>
                 <td className={`px-6 py-3 whitespace-nowrap text-sm ${t.muted}`}>{formatDate(log.triggered_at)}</td>

@@ -36,6 +36,14 @@ const triggerConfig = {
     description: "Run a full scrape of all PIDs from the Zepto Google Sheet across all 9 cities. Results are written to a new tab:",
     code: "Zepto_Manual_YYYY-MM-DD_HH-MM",
   },
+  instamart: {
+    color: "bg-[#FC8019] hover:bg-[#e06b0b] text-white",
+    bar: "bg-[#FC8019]",
+    brandClass: "text-[#FC8019]",
+    name: "instamart",
+    description: "Run a full scrape of all PIDs from the Instamart Google Sheet across all 8 cities. Results are written to a new tab:",
+    code: "Instamart_Manual_YYYY-MM-DD_HH-MM",
+  },
 };
 
 export function ManualTriggerCard({ t, dark, brand, status, isTriggering, onTrigger }: {
