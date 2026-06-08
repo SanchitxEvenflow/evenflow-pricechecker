@@ -34,6 +34,8 @@ interface FlipkartScrapeResult {
   progress?: number; total?: number; done?: boolean;
 }
 
+interface SheetProduct { id: string; title: string; brand: string; }
+
 // ─── Theme hook ─────────────────────────────────────────────────────────────
 function useTheme() {
   const [dark, setDark] = useState(true);
@@ -72,6 +74,97 @@ function Badge({ status }: { status: string }) {
   };
   const c = colors[status] || "bg-neutral-500/10 text-neutral-400";
   return <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold capitalize ${c}`}>{status.replace("_", " ")}</span>;
+}
+
+// ─── Product Picker (shared across all platforms) ───────────────────────────
+function ProductPicker({
+  products, selectedIds, onToggle, loading, accentFocus, t, dark,
+}: {
+  products: SheetProduct[]; selectedIds: string[]; onToggle: (id: string) => void;
+  loading: boolean; accentFocus: string; t: any; dark: boolean;
+}) {
+  const [brandFilter, setBrandFilter] = useState("All Brands");
+  const [search, setSearch] = useState("");
+  const [open, setOpen] = useState(false);
+
+  const brands = [...new Set(products.map(p => p.brand).filter(Boolean))].sort();
+  const filtered = products.filter(p =>
+    (brandFilter === "All Brands" || p.brand === brandFilter) &&
+    (!search || p.title.toLowerCase().includes(search.toLowerCase()) || p.id.toLowerCase().includes(search.toLowerCase())) &&
+    !selectedIds.includes(p.id)
+  );
+
+  if (!loading && products.length === 0) return null;
+
+  return (
+    <div className="mb-5">
+      <div className="flex items-center justify-between mb-2">
+        <p className={`text-sm font-semibold ${t.text}`}>
+          Pick from Sheet {loading && <span className={`text-xs font-normal ${t.muted}`}>(loading…)</span>}
+        </p>
+        {brands.length > 0 && (
+          <select
+            value={brandFilter}
+            onChange={e => setBrandFilter(e.target.value)}
+            className={`text-xs rounded-lg px-3 py-1.5 border focus:outline-none ${t.input}`}
+          >
+            <option value="All Brands">All Brands</option>
+            {brands.map(b => <option key={b} value={b}>{b}</option>)}
+          </select>
+        )}
+      </div>
+
+      <div className="relative">
+        <input
+          type="text"
+          placeholder={loading ? "Loading products…" : `Search ${products.length} product${products.length !== 1 ? "s" : ""}…`}
+          value={search}
+          disabled={loading || products.length === 0}
+          onChange={e => { setSearch(e.target.value); setOpen(true); }}
+          onFocus={() => setOpen(true)}
+          onBlur={() => setTimeout(() => setOpen(false), 150)}
+          className={`w-full rounded-xl px-4 py-2.5 text-sm border focus:outline-none focus:ring-2 ${accentFocus} ${t.input}`}
+        />
+        {open && filtered.length > 0 && (
+          <div className={`absolute z-20 w-full mt-1 rounded-xl border ${t.border} ${t.card} shadow-lg max-h-52 overflow-y-auto`}>
+            {filtered.map(p => (
+              <button
+                key={p.id}
+                onMouseDown={() => { onToggle(p.id); setSearch(""); setOpen(false); }}
+                className={`w-full text-left px-4 py-2.5 flex items-center justify-between gap-3 ${dark ? "hover:bg-neutral-800" : "hover:bg-neutral-100"}`}
+              >
+                <div className="min-w-0">
+                  <p className={`text-sm font-medium truncate ${t.text}`}>{p.title || p.id}</p>
+                  {p.brand && <p className={`text-xs ${t.muted}`}>{p.brand}</p>}
+                </div>
+                <span className={`text-xs ${t.muted} font-mono shrink-0`}>{p.id}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {selectedIds.length > 0 && (
+        <div className="flex flex-wrap gap-2 mt-3">
+          {selectedIds.map(id => {
+            const p = products.find(x => x.id === id);
+            return (
+              <span key={id} className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border ${dark ? "bg-neutral-800 border-neutral-700 text-neutral-200" : "bg-neutral-100 border-neutral-300 text-neutral-700"}`}>
+                <span className="max-w-[200px] truncate">{p?.title || id}</span>
+                <button onClick={() => onToggle(id)} className={`${t.muted} hover:text-red-400 transition-colors font-bold`}>×</button>
+              </span>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="flex items-center gap-3 mt-4">
+        <div className={`flex-1 border-t ${t.border}`} />
+        <span className={`text-xs ${t.muted}`}>or paste IDs directly</span>
+        <div className={`flex-1 border-t ${t.border}`} />
+      </div>
+    </div>
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -123,6 +216,21 @@ function HomePage({ t, dark }: { t: any; dark: boolean }) {
   const [isScraping, setIsScraping] = useState(false);
   const [error, setError] = useState("");
   const [stats, setStats] = useState({ total: 0, processed: 0, remaining: 0, success: 0, failed: 0 });
+  const [sheetProducts, setSheetProducts] = useState<SheetProduct[]>([]);
+  const [productsLoading, setProductsLoading] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    setProductsLoading(true);
+    fetch(`${API}/sheets/amazon/products`)
+      .then(r => r.ok ? r.json() : [])
+      .then(data => setSheetProducts(Array.isArray(data) ? data : []))
+      .catch(() => {})
+      .finally(() => setProductsLoading(false));
+  }, []);
+
+  const toggleProduct = (id: string) =>
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
 
   const parseAsins = (text: string) => {
     const raw = text.split(/[\n,]+/).map(a => a.trim().toUpperCase()).filter(Boolean);
@@ -131,7 +239,7 @@ function HomePage({ t, dark }: { t: any; dark: boolean }) {
   };
 
   const handleScrape = async () => {
-    const asins = parseAsins(asinText);
+    const asins = [...new Set([...selectedIds, ...parseAsins(asinText)])];
     if (asins.length === 0) { setError("Please enter at least one ASIN"); return; }
     setError("");
     setIsScraping(true);
@@ -237,6 +345,8 @@ function HomePage({ t, dark }: { t: any; dark: boolean }) {
             <p className={`mt-1 text-sm ${t.muted}`}>Paste ASINs below (one per line) to test scraping. Results stay in browser — no sheet writes.</p>
           </div>
         </div>
+        <ProductPicker products={sheetProducts} selectedIds={selectedIds} onToggle={toggleProduct}
+          loading={productsLoading} accentFocus="focus:ring-[#FF9900]/50" t={t} dark={dark} />
         <textarea
           value={asinText}
           onChange={e => setAsinText(e.target.value)}
@@ -246,10 +356,14 @@ function HomePage({ t, dark }: { t: any; dark: boolean }) {
           disabled={isScraping}
         />
         <div className="flex items-center justify-between mt-4">
-          <p className={`text-xs ${t.muted}`}>{parseAsins(asinText).length} unique ASIN(s) detected</p>
+          <p className={`text-xs ${t.muted}`}>
+            {selectedIds.length > 0
+              ? `${selectedIds.length} from sheet + ${parseAsins(asinText).length} pasted`
+              : `${parseAsins(asinText).length} unique ASIN(s) detected`}
+          </p>
           <button
             onClick={handleScrape}
-            disabled={isScraping || parseAsins(asinText).length === 0}
+            disabled={isScraping || (parseAsins(asinText).length === 0 && selectedIds.length === 0)}
             className="bg-[#FF9900] hover:bg-[#e88a00] text-black px-6 py-3 rounded-xl font-medium text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
           >
             {isScraping ? <><Spin /> Scraping...</> : "Run Scraper"}
@@ -720,11 +834,26 @@ function BlinkitPage({ t, dark }: { t: any; dark: boolean }) {
   const [isScraping, setIsScraping] = useState(false);
   const [error, setError] = useState("");
   const [stats, setStats] = useState({ total: 0, done: 0, success: 0, failed: 0 });
+  const [sheetProducts, setSheetProducts] = useState<SheetProduct[]>([]);
+  const [productsLoading, setProductsLoading] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    setProductsLoading(true);
+    fetch(`${API}/price/blinkit/products`)
+      .then(r => r.ok ? r.json() : [])
+      .then(data => setSheetProducts(Array.isArray(data) ? data : []))
+      .catch(() => {})
+      .finally(() => setProductsLoading(false));
+  }, []);
+
+  const toggleProduct = (id: string) =>
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
 
   const parseIds = (text: string) => [...new Set(text.split(/[\n,]+/).map(a => a.trim()).filter(Boolean))];
 
   const handleScrape = async () => {
-    const ids = parseIds(idText);
+    const ids = [...new Set([...selectedIds, ...parseIds(idText)])];
     if (!ids.length) { setError("Enter at least one product ID"); return; }
     setError(""); setIsScraping(true);
     setResults({}); setStats({ total: ids.length * BLINKIT_CITIES.length, done: 0, success: 0, failed: 0 });
@@ -806,11 +935,15 @@ function BlinkitPage({ t, dark }: { t: any; dark: boolean }) {
             <p className={`mt-1 text-sm ${t.muted}`}>Paste Blinkit product IDs (one per line). Scrapes all 10 cities concurrently.</p>
           </div>
         </div>
+        <ProductPicker products={sheetProducts} selectedIds={selectedIds} onToggle={toggleProduct}
+          loading={productsLoading} accentFocus="focus:ring-[#F8CB46]/50" t={t} dark={dark} />
         <textarea value={idText} onChange={e => setIdText(e.target.value)} placeholder={"12345\n67890"} rows={4}
           className={`w-full rounded-xl px-4 py-3 text-sm font-mono border focus:outline-none focus:ring-2 focus:ring-[#F8CB46]/50 resize-y ${t.input}`} disabled={isScraping} />
         <div className="flex items-center justify-between mt-4">
-          <p className={`text-xs ${t.muted}`}>{parseIds(idText).length} product ID(s) × 10 cities = {parseIds(idText).length * 10} requests</p>
-          <button onClick={handleScrape} disabled={isScraping || !parseIds(idText).length}
+          <p className={`text-xs ${t.muted}`}>
+            {[...new Set([...selectedIds, ...parseIds(idText)])].length} product ID(s) × 10 cities = {[...new Set([...selectedIds, ...parseIds(idText)])].length * 10} requests
+          </p>
+          <button onClick={handleScrape} disabled={isScraping || (!parseIds(idText).length && !selectedIds.length)}
             className="bg-[#F8CB46] hover:bg-[#e5b93d] text-black px-6 py-3 rounded-xl font-medium text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2">
             {isScraping ? <><Spin /> Scraping...</> : "Scrape All Cities"}
           </button>
@@ -906,11 +1039,26 @@ function ZeptoPage({ t, dark }: { t: any; dark: boolean }) {
   const [isScraping, setIsScraping] = useState(false);
   const [error, setError] = useState("");
   const [stats, setStats] = useState({ total: 0, done: 0, success: 0, failed: 0 });
+  const [sheetProducts, setSheetProducts] = useState<SheetProduct[]>([]);
+  const [productsLoading, setProductsLoading] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    setProductsLoading(true);
+    fetch(`${API}/price/zepto/products`)
+      .then(r => r.ok ? r.json() : [])
+      .then(data => setSheetProducts(Array.isArray(data) ? data : []))
+      .catch(() => {})
+      .finally(() => setProductsLoading(false));
+  }, []);
+
+  const toggleProduct = (id: string) =>
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
 
   const parseIds = (text: string) => [...new Set(text.split(/[\n,]+/).map(a => a.trim()).filter(Boolean))];
 
   const handleScrape = async () => {
-    const ids = parseIds(idText);
+    const ids = [...new Set([...selectedIds, ...parseIds(idText)])];
     if (!ids.length) { setError("Enter at least one product ID"); return; }
     setError(""); setIsScraping(true);
     setResults({}); setStats({ total: ids.length * ZEPTO_CITIES.length, done: 0, success: 0, failed: 0 });
@@ -992,11 +1140,15 @@ function ZeptoPage({ t, dark }: { t: any; dark: boolean }) {
             <p className={`mt-1 text-sm ${t.muted}`}>Paste Zepto product IDs (one per line). Scrapes all 10 cities concurrently.</p>
           </div>
         </div>
+        <ProductPicker products={sheetProducts} selectedIds={selectedIds} onToggle={toggleProduct}
+          loading={productsLoading} accentFocus="focus:ring-[#FF3269]/50" t={t} dark={dark} />
         <textarea value={idText} onChange={e => setIdText(e.target.value)} placeholder={"c834d3ca-...\n4f54ea62-..."} rows={4}
           className={`w-full rounded-xl px-4 py-3 text-sm font-mono border focus:outline-none focus:ring-2 focus:ring-[#FF3269]/50 resize-y ${t.input}`} disabled={isScraping} />
         <div className="flex items-center justify-between mt-4">
-          <p className={`text-xs ${t.muted}`}>{parseIds(idText).length} product ID(s) × 10 cities = {parseIds(idText).length * 10} requests</p>
-          <button onClick={handleScrape} disabled={isScraping || !parseIds(idText).length}
+          <p className={`text-xs ${t.muted}`}>
+            {[...new Set([...selectedIds, ...parseIds(idText)])].length} product ID(s) × 10 cities = {[...new Set([...selectedIds, ...parseIds(idText)])].length * 10} requests
+          </p>
+          <button onClick={handleScrape} disabled={isScraping || (!parseIds(idText).length && !selectedIds.length)}
             className="bg-[#FF3269] hover:bg-[#e02b5c] text-white px-6 py-3 rounded-xl font-medium text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2">
             {isScraping ? <><Spin /> Scraping...</> : "Scrape All Cities"}
           </button>
@@ -1089,6 +1241,21 @@ function FlipkartPage({ t, dark }: { t: any; dark: boolean }) {
   const [isScraping, setIsScraping] = useState(false);
   const [error, setError] = useState("");
   const [stats, setStats] = useState({ total: 0, processed: 0, remaining: 0, success: 0, failed: 0 });
+  const [sheetProducts, setSheetProducts] = useState<SheetProduct[]>([]);
+  const [productsLoading, setProductsLoading] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    setProductsLoading(true);
+    fetch(`${API}/sheets/flipkart/products`)
+      .then(r => r.ok ? r.json() : [])
+      .then(data => setSheetProducts(Array.isArray(data) ? data : []))
+      .catch(() => {})
+      .finally(() => setProductsLoading(false));
+  }, []);
+
+  const toggleProduct = (id: string) =>
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
 
   const parseFsns = (text: string) => {
     const raw = text.split(/[\n,]+/).map(a => a.trim()).filter(Boolean);
@@ -1097,7 +1264,7 @@ function FlipkartPage({ t, dark }: { t: any; dark: boolean }) {
   };
 
   const handleScrape = async () => {
-    const fsns = parseFsns(fsnText);
+    const fsns = [...new Set([...selectedIds, ...parseFsns(fsnText)])];
     if (fsns.length === 0) { setError("Please enter at least one FSN"); return; }
     setError("");
     setIsScraping(true);
@@ -1175,6 +1342,8 @@ function FlipkartPage({ t, dark }: { t: any; dark: boolean }) {
             <p className={`mt-1 text-sm ${t.muted}`}>Paste FSNs below (one per line or comma-separated) to test scraping. Results stay in browser — no sheet writes.</p>
           </div>
         </div>
+        <ProductPicker products={sheetProducts} selectedIds={selectedIds} onToggle={toggleProduct}
+          loading={productsLoading} accentFocus="focus:ring-[#2874F0]/50" t={t} dark={dark} />
         <textarea
           value={fsnText}
           onChange={e => setFsnText(e.target.value)}
@@ -1184,10 +1353,14 @@ function FlipkartPage({ t, dark }: { t: any; dark: boolean }) {
           disabled={isScraping}
         />
         <div className="flex items-center justify-between mt-4">
-          <p className={`text-xs ${t.muted}`}>{parseFsns(fsnText).length} unique FSN(s) detected</p>
+          <p className={`text-xs ${t.muted}`}>
+            {selectedIds.length > 0
+              ? `${selectedIds.length} from sheet + ${parseFsns(fsnText).length} pasted`
+              : `${parseFsns(fsnText).length} unique FSN(s) detected`}
+          </p>
           <button
             onClick={handleScrape}
-            disabled={isScraping || parseFsns(fsnText).length === 0}
+            disabled={isScraping || (parseFsns(fsnText).length === 0 && selectedIds.length === 0)}
             className="bg-[#2874F0] hover:bg-[#1a5dc8] text-white px-6 py-3 rounded-xl font-medium text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
           >
             {isScraping ? <><Spin /> Scraping...</> : "Run Scraper"}

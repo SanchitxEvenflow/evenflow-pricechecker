@@ -3,14 +3,15 @@
 import asyncio
 import json
 import logging
+import os
 from functools import partial
 
 from fastapi import APIRouter, Request, HTTPException
-from fastapi.responses import StreamingResponse, JSONResponse
 
 from blinkit.locations import LOCATIONS, LOCATIONS_BY_CITY, CITY_NAMES
 from blinkit.scraper import fetch_blinkit_data
 from schemas.price import BlinkitRequest, BlinkitAllCitiesRequest, BlinkitResponse
+from utils.google_sheets import GoogleSheetsClient
 
 logger = logging.getLogger(__name__)
 
@@ -130,3 +131,17 @@ async def trigger_manual_blinkit(request: Request):
 async def blinkit_cron_status(request: Request):
     """Return current Blinkit scrape status."""
     return dict(getattr(request.app.state, "blinkit_cron_status", {}))
+
+
+@router.get("/blinkit/products")
+async def get_blinkit_products():
+    """Return product catalog (id, title, brand) from the Blinkit source sheet."""
+    sheet_id = os.getenv("BLINKIT_SHEET_ID", "")
+    source_tab = os.getenv("BLINKIT_SOURCE_TAB", "Sheet1")
+    if not sheet_id:
+        raise HTTPException(status_code=503, detail="Blinkit sheet not configured (set BLINKIT_SHEET_ID)")
+    try:
+        return GoogleSheetsClient().get_products_from_sheet(sheet_id, source_tab)
+    except Exception as e:
+        logger.exception("Failed to fetch Blinkit products")
+        raise HTTPException(status_code=500, detail=str(e))

@@ -163,6 +163,20 @@ async def preview_flipkart_sheet(body: FlipkartPreviewRequest, sheets_client: Go
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@sheets_router.get("/products")
+async def get_flipkart_products(sheets_client: GoogleSheetsClient = Depends(get_sheets_client)):
+    """Return product catalog (id, title, brand) from the Flipkart source sheet."""
+    sheet_id = os.getenv("FLIPKART_SHEET_ID", "")
+    source_tab = os.getenv("FLIPKART_SOURCE_TAB", "Sheet1")
+    if not sheet_id:
+        raise HTTPException(status_code=503, detail="Flipkart sheet not configured (set FLIPKART_SHEET_ID)")
+    try:
+        return sheets_client.get_products_from_sheet(sheet_id, source_tab)
+    except Exception as e:
+        logger.exception("Failed to fetch Flipkart products")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @sheets_router.post("/api/trigger-manual-scheduler")
 async def trigger_manual_flipkart_scheduler(request: Request):
     """Trigger a full scrape of all Flipkart FSNs from the sheet, writing to a Flipkart_Manual tab."""

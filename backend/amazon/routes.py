@@ -129,6 +129,20 @@ async def preview_sheet(body: PreviewRequest, sheets_client: GoogleSheetsClient 
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@sheets_router.get("/products")
+async def get_amazon_products(sheets_client: GoogleSheetsClient = Depends(get_sheets_client)):
+    """Return product catalog (id, title, brand) from the Amazon source sheet."""
+    sheet_id = os.getenv("CRON_SHEET_ID") or os.getenv("SPREADSHEET_ID", "")
+    source_tab = os.getenv("CRON_SOURCE_TAB") or os.getenv("WORKSHEET_NAME", "Sheet1")
+    if not sheet_id:
+        raise HTTPException(status_code=503, detail="Amazon sheet not configured (set SPREADSHEET_ID)")
+    try:
+        return sheets_client.get_products_from_sheet(sheet_id, source_tab)
+    except Exception as e:
+        logger.exception("Failed to fetch Amazon products")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @sheets_router.post("/cron-trigger")
 async def cron_trigger(request: Request):
     """Manually fire the scheduled scrape job immediately (runs in background)."""

@@ -82,6 +82,34 @@ class GoogleSheetsClient:
                 
         return asins
 
+    def get_products_from_sheet(self, spreadsheet_id: str, tab_name: str) -> list[dict[str, Any]]:
+        """Read columns A:C and return product catalog for the picker UI.
+
+        Skips header row (row 1). Returns [{id, title, brand}] where:
+          A = ASIN/FSN/PID, B = Product title, C = Brand
+        """
+        if not self.service:
+            raise ValueError("Google Sheets service not initialized (missing credentials).")
+
+        range_name = f"{self._tab(tab_name)}!A:C"
+        result = self.service.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range=range_name
+        ).execute()
+
+        values = result.get("values", [])
+        products = []
+        for i in range(1, len(values)):
+            row = values[i]
+            if not row or not row[0].strip():
+                continue
+            products.append({
+                "id": row[0].strip(),
+                "title": row[1].strip() if len(row) > 1 else "",
+                "brand": row[2].strip() if len(row) > 2 else "",
+            })
+        return products
+
     def list_tabs(self, spreadsheet_id: str) -> list[str]:
         """Returns all sheet/tab names in the spreadsheet."""
         if not self.service:
