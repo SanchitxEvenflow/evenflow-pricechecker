@@ -64,7 +64,7 @@ export function FlipkartInputCard({ t, fsnText, setFsnText, isScraping, fsnCount
         </p>
         <button
           onClick={onScrape}
-          disabled={isScraping || fsnCount === 0}
+          disabled={isScraping || (fsnCount === 0 && selectedIds.length === 0)}
           className="bg-[#2874F0] hover:bg-[#1a5dc8] text-white px-6 py-3 rounded-xl font-medium text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
         >
           {isScraping ? <><Spin /> Scraping...</> : "Run Scraper"}

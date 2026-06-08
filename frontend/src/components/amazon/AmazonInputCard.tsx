@@ -64,7 +64,7 @@ export function AmazonInputCard({ t, asinText, setAsinText, isScraping, asinCoun
         </p>
         <button
           onClick={onScrape}
-          disabled={isScraping || asinCount === 0}
+          disabled={isScraping || (asinCount === 0 && selectedIds.length === 0)}
           className="bg-[#FF9900] hover:bg-[#e88a00] text-black px-6 py-3 rounded-xl font-medium text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
         >
           {isScraping ? <><Spin /> Scraping...</> : "Run Scraper"}
