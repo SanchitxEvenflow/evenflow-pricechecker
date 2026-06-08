@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import os
 from functools import partial
 
 from fastapi import APIRouter, Request, HTTPException
@@ -11,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from zepto.locations import LOCATIONS, LOCATIONS_BY_CITY, CITY_NAMES
 from zepto.scraper import fetch_zepto_data
 from schemas.price import ZeptoRequest, ZeptoAllCitiesRequest, ZeptoResponse
+from utils.google_sheets import GoogleSheetsClient
 
 logger = logging.getLogger(__name__)
 
@@ -136,3 +138,17 @@ async def trigger_manual_zepto(request: Request):
 async def zepto_cron_status(request: Request):
     """Return current Zepto scrape status."""
     return dict(getattr(request.app.state, "zepto_cron_status", {}))
+
+
+@router.get("/zepto/products")
+async def get_zepto_products():
+    """Return product catalog (id, title, brand) from the Zepto source sheet."""
+    sheet_id = os.getenv("ZEPTO_SHEET_ID", "")
+    source_tab = os.getenv("ZEPTO_SOURCE_TAB", "Sheet1")
+    if not sheet_id:
+        raise HTTPException(status_code=503, detail="Zepto sheet not configured (set ZEPTO_SHEET_ID)")
+    try:
+        return GoogleSheetsClient().get_products_from_sheet(sheet_id, source_tab)
+    except Exception as e:
+        logger.exception("Failed to fetch Zepto products")
+        raise HTTPException(status_code=500, detail=str(e))

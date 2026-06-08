@@ -13,7 +13,6 @@ from pydantic import BaseModel
 
 from flipkart.scraper import scrape_flipkart
 from schemas.price import FlipkartRequest, FlipkartResponse
-from utils.google_sheets import GoogleSheetsClient
 from utils.scrape_helpers import SCRAPE_CONCURRENCY
 
 logger = logging.getLogger(__name__)
@@ -161,6 +160,20 @@ async def preview_flipkart_sheet(body: FlipkartPreviewRequest, sheets_client: Go
         )
     except Exception as e:
         logger.exception("Failed to preview Flipkart sheet")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@sheets_router.get("/products")
+async def get_flipkart_products(sheets_client: GoogleSheetsClient = Depends(get_sheets_client)):
+    """Return product catalog (id, title, brand) from the Flipkart source sheet."""
+    sheet_id = os.getenv("FLIPKART_SHEET_ID", "")
+    source_tab = os.getenv("FLIPKART_SOURCE_TAB", "Sheet1")
+    if not sheet_id:
+        raise HTTPException(status_code=503, detail="Flipkart sheet not configured (set FLIPKART_SHEET_ID)")
+    try:
+        return sheets_client.get_products_from_sheet(sheet_id, source_tab)
+    except Exception as e:
+        logger.exception("Failed to fetch Flipkart products")
         raise HTTPException(status_code=500, detail=str(e))
 
 

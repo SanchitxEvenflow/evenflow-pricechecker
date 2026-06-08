@@ -111,7 +111,7 @@ class ProxyManager:
         with self._lock:
             self.failure_count[proxy] = self.failure_count.get(proxy, 0) + 1
 
-            if self.failure_count[proxy] >= 2:
+            if self.failure_count[proxy] >= 10:
                 if proxy in self.active_pool:
                     self.active_pool.remove(proxy)
                 self.dead_pool[proxy] = time.time()
