@@ -55,43 +55,47 @@ class GoogleSheetsClient:
 
     def get_asins_with_rows(self, spreadsheet_id: str, tab_name: str) -> list[dict[str, Any]]:
         """
-        Reads Column A and returns a list of dictionaries with row number and ASIN.
-        Skips the header row (row 1).
+        Reads Columns A:D and returns a list of dictionaries with row number and ASIN.
+        Skips the header row (row 1). Only returns rows where column D is "Active".
         """
         if not self.service:
             raise ValueError("Google Sheets service not initialized (missing credentials).")
 
-        range_name = f"{self._tab(tab_name)}!A:A"
-        
+        range_name = f"{self._tab(tab_name)}!A:D"
+
         result = self.service.spreadsheets().values().get(
             spreadsheetId=spreadsheet_id,
             range=range_name
         ).execute()
 
         values = result.get("values", [])
-        
+
         asins = []
-        # Start at index 1 to skip header (assuming row 1 is header)
         for i in range(1, len(values)):
             row_data = values[i]
-            if row_data and row_data[0].strip():
-                asins.append({
-                    "row": i + 1, # Sheets are 1-indexed, so index 1 -> row 2
-                    "asin": row_data[0].strip()
-                })
-                
+            if not row_data or not row_data[0].strip():
+                continue
+            status = row_data[3].strip().lower() if len(row_data) > 3 else "active"
+            if status != "active":
+                continue
+            asins.append({
+                "row": i + 1,
+                "asin": row_data[0].strip()
+            })
+
         return asins
 
     def get_products_from_sheet(self, spreadsheet_id: str, tab_name: str) -> list[dict[str, Any]]:
-        """Read columns A:C and return product catalog for the picker UI.
+        """Read columns A:D and return active product catalog for the picker UI.
 
         Skips header row (row 1). Returns [{id, title, brand}] where:
-          A = ASIN/FSN/PID, B = Product title, C = Brand
+          A = ASIN/FSN/PID, B = Product title, C = Brand, D = Status
+        Only rows with Status == "Active" (case-insensitive) are returned.
         """
         if not self.service:
             raise ValueError("Google Sheets service not initialized (missing credentials).")
 
-        range_name = f"{self._tab(tab_name)}!A:C"
+        range_name = f"{self._tab(tab_name)}!A:D"
         result = self.service.spreadsheets().values().get(
             spreadsheetId=spreadsheet_id,
             range=range_name
@@ -102,6 +106,9 @@ class GoogleSheetsClient:
         for i in range(1, len(values)):
             row = values[i]
             if not row or not row[0].strip():
+                continue
+            status = row[3].strip().lower() if len(row) > 3 else "active"
+            if status != "active":
                 continue
             products.append({
                 "id": row[0].strip(),
