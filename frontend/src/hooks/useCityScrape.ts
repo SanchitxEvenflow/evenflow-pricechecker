@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { API } from "@/lib/api";
 import { csvEscape } from "@/lib/csv";
 import { errorMessage } from "@/lib/errors";
 import { parseUniqueTokens } from "@/lib/parsers";
+import type { SheetProduct } from "@/components/shared/ProductPicker";
 import type { CityResult, CityScrapeConfig } from "@/types/price-scraper";
 
 export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>) {
@@ -13,11 +14,26 @@ export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>)
   const [isScraping, setIsScraping] = useState(false);
   const [error, setError] = useState("");
   const [stats, setStats] = useState({ total: 0, done: 0, success: 0, failed: 0 });
+  const [sheetProducts, setSheetProducts] = useState<SheetProduct[]>([]);
+  const [productsLoading, setProductsLoading] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    setProductsLoading(true);
+    fetch(`${API}/price/${config.brand}/products`)
+      .then(r => r.ok ? r.json() : [])
+      .then(data => setSheetProducts(Array.isArray(data) ? data : []))
+      .catch(() => {})
+      .finally(() => setProductsLoading(false));
+  }, [config.brand]);
+
+  const toggleProduct = (id: string) =>
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
 
   const parseIds = parseUniqueTokens;
 
   const handleScrape = async () => {
-    const ids = parseIds(idText);
+    const ids = [...new Set([...selectedIds, ...parseIds(idText)])];
     if (!ids.length) { setError(config.emptyInputError); return; }
     setError(""); setIsScraping(true);
     setResults({}); setStats({ total: ids.length * config.cities.length, done: 0, success: 0, failed: 0 });
@@ -87,5 +103,5 @@ export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>)
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
   };
 
-  return { idText, setIdText, results, isScraping, error, stats, parseIds, handleScrape, downloadCSV };
+  return { idText, setIdText, results, isScraping, error, stats, parseIds, handleScrape, downloadCSV, sheetProducts, productsLoading, selectedIds, toggleProduct };
 }
