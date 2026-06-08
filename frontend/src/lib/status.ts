@@ -24,3 +24,10 @@ export function zeptoStatusColor(s: string) {
   if (s === "unserviceable" || s === "not_found") return "bg-neutral-500/15 text-neutral-400 border-neutral-500/30";
   return "bg-yellow-500/15 text-yellow-400 border-yellow-500/30";
 }
+
+export function instamartStatusColor(s: string) {
+  if (s === "available") return "bg-green-500/15 text-green-400 border-green-500/30";
+  if (s === "out_of_stock") return "bg-red-500/15 text-red-400 border-red-500/30";
+  if (s === "unserviceable" || s === "not_found") return "bg-neutral-500/15 text-neutral-400 border-neutral-500/30";
+  return "bg-yellow-500/15 text-yellow-400 border-yellow-500/30";
+}

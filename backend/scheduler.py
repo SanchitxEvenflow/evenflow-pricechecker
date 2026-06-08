@@ -29,6 +29,7 @@ from blinkit.scraper import fetch_blinkit_data
 from blinkit.locations import LOCATIONS as BLINKIT_LOCATIONS
 from zepto.scraper import fetch_zepto_data
 from zepto.locations import LOCATIONS as ZEPTO_LOCATIONS
+from instamart.locations import LOCATIONS as INSTAMART_LOCATIONS
 from utils.google_sheets import GoogleSheetsClient
 from utils import run_logger
 
@@ -665,18 +666,13 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str) -> Non
                         lon=loc["lng"],
                         city=loc["name"],
                         store_id=loc.get("store_id", ""),
-                        address=loc.get("address", ""),
                         pincode=loc.get("pincode"),
                         proxy_manager=proxy_manager,
                     ),
                 )
 
-        for loc in LOCATIONS:
-            pass
-
         city_results = await asyncio.gather(
-
-            *[scrape_one_city(pid, loc) for loc in LOCATIONS],
+            *[scrape_one_city(pid, loc) for loc in INSTAMART_LOCATIONS],
             return_exceptions=True,
         )
 
@@ -734,7 +730,7 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str) -> Non
     logger.info(
         "Instamart: run complete — %d PIDs × %d cities | tab '%s' | time: %dm %ds",
         len(pids),
-        len(LOCATIONS),
+        len(INSTAMART_LOCATIONS),
         new_tab,
         minutes,
         seconds,

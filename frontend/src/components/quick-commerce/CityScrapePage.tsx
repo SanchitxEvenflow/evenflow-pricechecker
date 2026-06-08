@@ -25,7 +25,7 @@ export function CityScrapePage<T extends CityResult>({ t, dark, config }: { t: T
         ]} />
       )}
       {scrape.isScraping && scrape.stats.total > 0 && (
-        <ProgressBar dark={dark} t={t} processed={scrape.stats.done} total={scrape.stats.total} colorClass={config.brand === "blinkit" ? "bg-[#F8CB46]" : "bg-[#FF3269]"} />
+        <ProgressBar dark={dark} t={t} processed={scrape.stats.done} total={scrape.stats.total} colorClass={config.brand === "blinkit" ? "bg-[#F8CB46]" : config.brand === "zepto" ? "bg-[#FF3269]" : "bg-[#FC8019]"} />
       )}
       <CityResultsMatrix t={t} results={scrape.results} config={config} onDownloadCSV={scrape.downloadCSV} />
     </main>
