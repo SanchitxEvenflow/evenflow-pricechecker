@@ -15,6 +15,7 @@ import re
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse
 
+# pyrefly: ignore [missing-import]
 from playwright.async_api import Browser
 
 from proxy.manager import ProxyManager
