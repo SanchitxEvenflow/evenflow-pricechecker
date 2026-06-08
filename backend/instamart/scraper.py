@@ -164,14 +164,22 @@ async def fetch_instamart_data(
 
             # ── Extract embedded JSON state ────────────────────────────────
             scripts = re.findall(r"<script.*?>(.*?)</script>", content, re.DOTALL)
-            target_script = None
+
+            # First find the initial state script (may or may not contain this item)
+            initial_state_script = None
             for s in scripts:
-                if item_id in s and "window.___INITIAL_STATE___" in s:
-                    target_script = s
+                if "window.___INITIAL_STATE___" in s:
+                    initial_state_script = s
                     break
 
-            if not target_script:
-                logger.warning("[Instamart] %s: embedded state script not found", city)
+            if not initial_state_script:
+                # Wrong page served entirely (proxy redirect, bot page, etc.) — retry
+                title_match = re.search(r"<title>(.*?)</title>", content, re.IGNORECASE)
+                page_title = title_match.group(1) if title_match else "unknown"
+                logger.warning(
+                    "[Instamart] %s: no initial state in page — page_title=%r, content_len=%d",
+                    city, page_title, len(content),
+                )
                 if proxy_manager:
                     proxy_manager.report_failure(proxy)
                 await _safe_close_context(context)
@@ -180,7 +188,28 @@ async def fetch_instamart_data(
                     continue
                 return _error_result("state_script_not_found")
 
-            match = re.search(r"(\{.*\})", target_script, re.DOTALL)
+            if item_id not in initial_state_script:
+                # Page loaded correctly but product not in this store's inventory
+                logger.info("[Instamart] %s: item %s not found in store state — unserviceable", city, item_id)
+                if proxy_manager:
+                    proxy_manager.report_success(proxy)
+                await _safe_close_context(context)
+                context = None
+                return {
+                    "product_id": item_id,
+                    "city": city,
+                    "title": f"Unserviceable at {city}",
+                    "price": None,
+                    "mrp": None,
+                    "status": "unserviceable",
+                    "is_sold_out": True,
+                    "url": product_url,
+                    "checked_at": now,
+                }
+
+            target_script = initial_state_script
+
+            match = re.search(r"window\.___INITIAL_STATE___\s*=\s*(.*?);\s*(?:window\.|var\s|let\s|const\s)", target_script, re.DOTALL)
             if not match:
                 logger.warning("[Instamart] %s: failed to regex JSON from script", city)
                 if proxy_manager:
