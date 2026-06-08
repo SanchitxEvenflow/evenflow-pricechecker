@@ -3,12 +3,14 @@
 import asyncio
 import json
 import logging
+import os
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse
 
 from instamart.locations import LOCATIONS, LOCATIONS_BY_CITY, CITY_NAMES
 from instamart.scraper import fetch_instamart_data
 from schemas.price import InstamartRequest, InstamartAllCitiesRequest, InstamartResponse
+from utils.google_sheets import GoogleSheetsClient
 
 logger = logging.getLogger(__name__)
 
@@ -126,3 +128,17 @@ async def trigger_manual_instamart(request: Request):
 async def instamart_cron_status(request: Request):
     """Return current instamart scrape status."""
     return dict(getattr(request.app.state, "instamart_cron_status", {}))
+
+
+@router.get("/instamart/products")
+async def get_instamart_products():
+    """Return product catalog (id, title, brand) from the Instamart source sheet."""
+    sheet_id = os.getenv("INSTAMART_SHEET_ID", "")
+    source_tab = os.getenv("INSTAMART_SOURCE_TAB", "Sheet1")
+    if not sheet_id:
+        raise HTTPException(status_code=503, detail="Instamart sheet not configured (set INSTAMART_SHEET_ID)")
+    try:
+        return GoogleSheetsClient().get_products_from_sheet(sheet_id, source_tab)
+    except Exception as e:
+        logger.exception("Failed to fetch Instamart products")
+        raise HTTPException(status_code=500, detail=str(e))
