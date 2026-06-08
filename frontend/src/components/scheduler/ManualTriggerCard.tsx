@@ -1,6 +1,7 @@
 "use client";
 
 import { Spin } from "@/components/shared/Spin";
+import { useSheetConfig } from "@/hooks/useSheetConfig";
 import type { CronStatus, ThemeClasses } from "@/types/price-scraper";
 
 const triggerConfig = {
@@ -46,6 +47,15 @@ const triggerConfig = {
   },
 };
 
+// Google Sheets icon (simplified)
+function SheetsIcon() {
+  return (
+    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M19 3H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V5a2 2 0 00-2-2zm-7 3h2v2h-2V6zm0 4h2v2h-2v-2zm0 4h2v2h-2v-2zm-4-8h2v2H8V6zm0 4h2v2H8v-2zm0 4h2v2H8v-2zm8-8h2v2h-2V6zm0 4h2v2h-2v-2zm0 4h2v2h-2v-2z"/>
+    </svg>
+  );
+}
+
 export function ManualTriggerCard({ t, dark, brand, status, isTriggering, onTrigger }: {
   t: ThemeClasses;
   dark: boolean;
@@ -55,6 +65,9 @@ export function ManualTriggerCard({ t, dark, brand, status, isTriggering, onTrig
   onTrigger: () => void;
 }) {
   const cfg = triggerConfig[brand];
+  const sheets = useSheetConfig();
+  const sheetUrl = sheets[brand];
+
   return (
     <div className={`${t.card} border ${t.border} rounded-2xl p-8 shadow-sm`}>
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -62,13 +75,27 @@ export function ManualTriggerCard({ t, dark, brand, status, isTriggering, onTrig
           <h2 className="text-2xl font-bold"><span className={cfg.brandClass}>{cfg.name}</span> — Manual Trigger</h2>
           <p className={`mt-1 text-sm ${t.muted}`}>{cfg.description} <code className={`text-xs px-1.5 py-0.5 rounded ${dark ? "bg-neutral-800" : "bg-neutral-100"}`}>{cfg.code}</code></p>
         </div>
-        <button
-          onClick={onTrigger}
-          disabled={isTriggering || status?.is_running === true}
-          className={`${cfg.color} px-8 py-3 rounded-xl font-medium text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shrink-0`}
-        >
-          {isTriggering ? <><Spin /> Starting...</> : status?.is_running ? "Scrape Running..." : "Manual Trigger"}
-        </button>
+        <div className="flex items-center gap-3 shrink-0">
+          {sheetUrl && (
+            <a
+              href={sheetUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Open Google Sheet"
+              className={`flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-medium transition-all border ${dark ? "border-neutral-700 bg-neutral-800 hover:bg-neutral-700 text-neutral-200" : "border-neutral-300 bg-white hover:bg-neutral-50 text-neutral-700"}`}
+            >
+              <SheetsIcon />
+              View Sheet
+            </a>
+          )}
+          <button
+            onClick={onTrigger}
+            disabled={isTriggering || status?.is_running === true}
+            className={`${cfg.color} px-8 py-3 rounded-xl font-medium text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2`}
+          >
+            {isTriggering ? <><Spin /> Starting...</> : status?.is_running ? "Scrape Running..." : "Manual Trigger"}
+          </button>
+        </div>
       </div>
 
       {status?.is_running && status.progress != null && status.total != null && status.total > 0 && (

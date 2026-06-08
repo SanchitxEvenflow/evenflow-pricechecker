@@ -3,10 +3,8 @@
 import asyncio
 import json
 import logging
-from functools import partial
-
 from fastapi import APIRouter, Request, HTTPException
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse
 
 from instamart.locations import LOCATIONS, LOCATIONS_BY_CITY, CITY_NAMES
 from instamart.scraper import fetch_instamart_data
@@ -15,6 +13,8 @@ from schemas.price import InstamartRequest, InstamartAllCitiesRequest, Instamart
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["instamart"])
+
+INSTAMART_CONCURRENCY = 5  # instamart rate-limits aggressively
 
 
 # ── Single city lookup ──────────────────────────────────────────────────────
@@ -30,20 +30,17 @@ async def check_instamart_price(body: InstamartRequest, request: Request):
         )
 
     proxy_manager = request.app.state.proxy_manager
+    browser = request.app.state.playwright_browser
 
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(
-        None,
-        partial(
-            fetch_instamart_data,
-            item_id=body.product_id,
-            pincode=city_data["pincode"],
-            lat=city_data["lat"],
-            lon=city_data["lng"],
-            city=body.city,
-            store_id=city_data["store_id"],
-            proxy_manager=proxy_manager,
-        ),
+    result = await fetch_instamart_data(
+        item_id=body.product_id,
+        pincode=city_data["pincode"],
+        lat=city_data["lat"],
+        lon=city_data["lng"],
+        city=body.city,
+        store_id=city_data["store_id"],
+        browser=browser,
+        proxy_manager=proxy_manager,
     )
 
     return InstamartResponse(**result)
@@ -51,25 +48,23 @@ async def check_instamart_price(body: InstamartRequest, request: Request):
 
 # ── All cities SSE stream ──────────────────────────────────────────────────
 
-INSTAMART_CONCURRENCY = 5  # instamart rate-limits aggressively
-
-
 @router.post("/instamart/all-cities")
 async def check_instamart_all_cities(body: InstamartAllCitiesRequest, request: Request):
     """
-    Scrape instamart for one or more product IDs across all 10 cities.
+    Scrape instamart for one or more product IDs across all cities.
     Results are streamed as SSE events as they complete.
     """
     proxy_manager = request.app.state.proxy_manager
+    browser = request.app.state.playwright_browser
     sem = asyncio.Semaphore(INSTAMART_CONCURRENCY)
     queue: asyncio.Queue = asyncio.Queue()
 
     # Build work items: (product_id, city_data)
-    work_items = []
-    for pid in body.product_ids:
-        for loc in LOCATIONS:
-            work_items.append((pid.strip(), loc))
-
+    work_items = [
+        (pid.strip(), loc)
+        for pid in body.product_ids
+        for loc in LOCATIONS
+    ]
     total = len(work_items)
 
     if total == 0:
@@ -79,26 +74,21 @@ async def check_instamart_all_cities(body: InstamartAllCitiesRequest, request: R
 
     async def worker(product_id: str, loc: dict) -> None:
         async with sem:
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None,
-                partial(
-                    fetch_instamart_data,
-                    item_id=product_id,
-                    pincode=loc["pincode"],
-                    lat=loc["lat"],
-                    lon=loc["lng"],
-                    city=loc["name"],
-                    store_id=loc["store_id"],
-                    proxy_manager=proxy_manager,
-                ),
+            result = await fetch_instamart_data(
+                item_id=product_id,
+                pincode=loc["pincode"],
+                lat=loc["lat"],
+                lon=loc["lng"],
+                city=loc["name"],
+                store_id=loc["store_id"],
+                browser=browser,
+                proxy_manager=proxy_manager,
             )
             await queue.put(result)
 
     async def event_stream():
         tasks = [asyncio.create_task(worker(pid, loc)) for pid, loc in work_items]
         done = 0
-
         try:
             while done < total:
                 result = await queue.get()
@@ -126,7 +116,7 @@ async def check_instamart_all_cities(body: InstamartAllCitiesRequest, request: R
 async def trigger_manual_instamart(request: Request):
     """Trigger a full instamart scrape of all PIDs from the sheet (runs in background)."""
     if request.app.state.instamart_cron_status.get("is_running"):
-        raise HTTPException(status_code=409, detail="A instamart scrape run is already in progress")
+        raise HTTPException(status_code=409, detail="An instamart scrape run is already in progress")
     from scheduler import run_manual_instamart_trigger
     asyncio.create_task(run_manual_instamart_trigger(request.app))
     return {"status": "started"}

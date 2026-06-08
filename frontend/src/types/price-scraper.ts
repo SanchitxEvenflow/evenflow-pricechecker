@@ -136,7 +136,7 @@ export interface CityScrapeConfig<T extends CityResult> {
   buttonClass: string;
   buttonText: string;
   resultsTitle: string;
-  totalRequestsMultiplierText: string;
+  progressColor: string;
   getCellLabel: (result: T) => string;
   statusColor: (status: string) => string;
 }

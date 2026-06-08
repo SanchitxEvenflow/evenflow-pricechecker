@@ -18,6 +18,7 @@ import random
 import re
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from playwright.async_api import Browser
@@ -535,8 +536,6 @@ async def _safe_close_context(context) -> None:
 
 def _parse_proxy(proxy_url: str) -> dict:
     """Parse proxy URL into Playwright's proxy format dict."""
-    from urllib.parse import urlparse
-
     parsed = urlparse(proxy_url)
     result: dict = {"server": f"{parsed.scheme}://{parsed.hostname}:{parsed.port}"}
     if parsed.username:

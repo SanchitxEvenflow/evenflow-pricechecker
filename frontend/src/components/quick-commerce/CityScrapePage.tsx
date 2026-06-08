@@ -15,7 +15,7 @@ export function CityScrapePage<T extends CityResult>({ t, dark, config }: { t: T
   return (
     <main className="max-w-[95vw] mx-auto px-6 py-8 space-y-8">
       <ErrorBanner error={scrape.error} />
-      <CityInputCard t={t} text={scrape.idText} setText={scrape.setIdText} isScraping={scrape.isScraping} parsedCount={parsedCount} config={config} onScrape={scrape.handleScrape} />
+      <CityInputCard t={t} dark={dark} text={scrape.idText} setText={scrape.setIdText} isScraping={scrape.isScraping} parsedCount={parsedCount} config={config} onScrape={scrape.handleScrape} />
       {scrape.stats.total > 0 && (
         <StatsGrid t={t} columnsClass="grid-cols-2 md:grid-cols-4" items={[
           { label: "Total", value: scrape.stats.total, color: "" },
@@ -25,7 +25,7 @@ export function CityScrapePage<T extends CityResult>({ t, dark, config }: { t: T
         ]} />
       )}
       {scrape.isScraping && scrape.stats.total > 0 && (
-        <ProgressBar dark={dark} t={t} processed={scrape.stats.done} total={scrape.stats.total} colorClass={config.brand === "blinkit" ? "bg-[#F8CB46]" : config.brand === "zepto" ? "bg-[#FF3269]" : "bg-[#FC8019]"} />
+        <ProgressBar dark={dark} t={t} processed={scrape.stats.done} total={scrape.stats.total} colorClass={config.progressColor} />
       )}
       <CityResultsMatrix t={t} results={scrape.results} config={config} onDownloadCSV={scrape.downloadCSV} />
     </main>

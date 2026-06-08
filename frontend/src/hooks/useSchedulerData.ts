@@ -27,146 +27,55 @@ export function useSchedulerData() {
     } catch {}
   }, []);
 
-  const fetchCron = useCallback(async () => {
+  const fetchAllStatus = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/sheets/amazon/cron-status`);
-      if (res.ok) setCronStatus(await res.json());
-    } catch {}
-  }, []);
-
-  const fetchBlinkitCron = useCallback(async () => {
-    try {
-      const res = await fetch(`${API}/price/blinkit/cron-status`);
-      if (res.ok) setBlinkitStatus(await res.json());
-    } catch {}
-  }, []);
-
-  const fetchFlipkartCron = useCallback(async () => {
-    try {
-      const res = await fetch(`${API}/sheets/flipkart/cron-status`);
-      if (res.ok) setFlipkartStatus(await res.json());
-    } catch {}
-  }, []);
-
-  const fetchZeptoCron = useCallback(async () => {
-    try {
-      const res = await fetch(`${API}/price/zepto/cron-status`);
-      if (res.ok) setZeptoStatus(await res.json());
-    } catch {}
-  }, []);
-
-  const fetchInstamartCron = useCallback(async () => {
-    try {
-      const res = await fetch(`${API}/price/instamart/cron-status`);
-      if (res.ok) setInstamartStatus(await res.json());
+      const res = await fetch(`${API}/cron-status/all`);
+      if (res.ok) {
+        const data = await res.json();
+        setCronStatus(data.amazon);
+        setFlipkartStatus(data.flipkart);
+        setBlinkitStatus(data.blinkit);
+        setZeptoStatus(data.zepto);
+        setInstamartStatus(data.instamart);
+      }
     } catch {}
   }, []);
 
   useEffect(() => {
-    const initial = setTimeout(() => { fetchCron(); fetchBlinkitCron(); fetchFlipkartCron(); fetchZeptoCron(); fetchInstamartCron(); fetchLogs(); }, 0);
-    const i1 = setInterval(fetchCron, 10000);
+    const initial = setTimeout(() => { fetchAllStatus(); fetchLogs(); }, 0);
+    const i1 = setInterval(fetchAllStatus, 10000);
     const i2 = setInterval(fetchLogs, 30000);
-    const i3 = setInterval(fetchBlinkitCron, 10000);
-    const i4 = setInterval(fetchFlipkartCron, 10000);
-    const i5 = setInterval(fetchZeptoCron, 10000);
-    const i6 = setInterval(fetchInstamartCron, 10000);
-    return () => { clearTimeout(initial); clearInterval(i1); clearInterval(i2); clearInterval(i3); clearInterval(i4); clearInterval(i5); clearInterval(i6); };
-  }, [fetchCron, fetchBlinkitCron, fetchFlipkartCron, fetchZeptoCron, fetchInstamartCron, fetchLogs]);
+    return () => { clearTimeout(initial); clearInterval(i1); clearInterval(i2); };
+  }, [fetchAllStatus, fetchLogs]);
 
-  const handleTrigger = async () => {
-    setIsTriggering(true);
+  const makeTrigger = (
+    endpoint: string,
+    setTriggering: (val: boolean) => void,
+    successMsg: string
+  ) => async () => {
+    setTriggering(true);
     setToast(null);
     try {
-      const res = await fetch(`${API}/sheets/amazon/api/trigger-manual-scheduler`, { method: "POST" });
+      const res = await fetch(`${API}${endpoint}`, { method: "POST" });
       if (res.ok) {
-        setToast({ type: "success", msg: "Amazon manual scrape triggered! Check progress below." });
+        setToast({ type: "success", msg: successMsg });
         setTimeout(fetchLogs, 2000);
       } else {
         const data = await res.json();
-        setToast({ type: "error", msg: data.detail || "Failed to trigger" });
+        setToast({ type: "error", msg: data.detail || "Failed to trigger scrape" });
       }
     } catch (e: unknown) {
       setToast({ type: "error", msg: errorMessage(e) });
     } finally {
-      setIsTriggering(false);
+      setTriggering(false);
     }
   };
 
-  const handleBlinkitTrigger = async () => {
-    setIsBlinkitTriggering(true);
-    setToast(null);
-    try {
-      const res = await fetch(`${API}/price/blinkit/api/trigger-manual-scheduler`, { method: "POST" });
-      if (res.ok) {
-        setToast({ type: "success", msg: "Blinkit manual scrape triggered! Check progress below." });
-        setTimeout(fetchLogs, 2000);
-      } else {
-        const data = await res.json();
-        setToast({ type: "error", msg: data.detail || "Failed to trigger Blinkit scrape" });
-      }
-    } catch (e: unknown) {
-      setToast({ type: "error", msg: errorMessage(e) });
-    } finally {
-      setIsBlinkitTriggering(false);
-    }
-  };
-
-  const handleFlipkartTrigger = async () => {
-    setIsFlipkartTriggering(true);
-    setToast(null);
-    try {
-      const res = await fetch(`${API}/sheets/flipkart/api/trigger-manual-scheduler`, { method: "POST" });
-      if (res.ok) {
-        setToast({ type: "success", msg: "Flipkart manual scrape triggered! Check progress below." });
-        setTimeout(fetchLogs, 2000);
-      } else {
-        const data = await res.json();
-        setToast({ type: "error", msg: data.detail || "Failed to trigger Flipkart scrape" });
-      }
-    } catch (e: unknown) {
-      setToast({ type: "error", msg: errorMessage(e) });
-    } finally {
-      setIsFlipkartTriggering(false);
-    }
-  };
-
-  const handleZeptoTrigger = async () => {
-    setIsZeptoTriggering(true);
-    setToast(null);
-    try {
-      const res = await fetch(`${API}/price/zepto/api/trigger-manual-scheduler`, { method: "POST" });
-      if (res.ok) {
-        setToast({ type: "success", msg: "Zepto manual scrape triggered! Check progress below." });
-        setTimeout(fetchLogs, 2000);
-      } else {
-        const data = await res.json();
-        setToast({ type: "error", msg: data.detail || "Failed to trigger Zepto scrape" });
-      }
-    } catch (e: unknown) {
-      setToast({ type: "error", msg: errorMessage(e) });
-    } finally {
-      setIsZeptoTriggering(false);
-    }
-  };
-
-  const handleInstamartTrigger = async () => {
-    setIsInstamartTriggering(true);
-    setToast(null);
-    try {
-      const res = await fetch(`${API}/price/instamart/api/trigger-manual-scheduler`, { method: "POST" });
-      if (res.ok) {
-        setToast({ type: "success", msg: "Instamart manual scrape triggered! Check progress below." });
-        setTimeout(fetchLogs, 2000);
-      } else {
-        const data = await res.json();
-        setToast({ type: "error", msg: data.detail || "Failed to trigger Instamart scrape" });
-      }
-    } catch (e: unknown) {
-      setToast({ type: "error", msg: errorMessage(e) });
-    } finally {
-      setIsInstamartTriggering(false);
-    }
-  };
+  const handleTrigger = makeTrigger("/sheets/amazon/api/trigger-manual-scheduler", setIsTriggering, "Amazon manual scrape triggered! Check progress below.");
+  const handleBlinkitTrigger = makeTrigger("/price/blinkit/api/trigger-manual-scheduler", setIsBlinkitTriggering, "Blinkit manual scrape triggered! Check progress below.");
+  const handleFlipkartTrigger = makeTrigger("/sheets/flipkart/api/trigger-manual-scheduler", setIsFlipkartTriggering, "Flipkart manual scrape triggered! Check progress below.");
+  const handleZeptoTrigger = makeTrigger("/price/zepto/api/trigger-manual-scheduler", setIsZeptoTriggering, "Zepto manual scrape triggered! Check progress below.");
+  const handleInstamartTrigger = makeTrigger("/price/instamart/api/trigger-manual-scheduler", setIsInstamartTriggering, "Instamart manual scrape triggered! Check progress below.");
 
   return {
     cronStatus,

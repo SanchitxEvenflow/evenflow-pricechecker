@@ -2,10 +2,21 @@
 
 import type { Dispatch, SetStateAction } from "react";
 import { Spin } from "@/components/shared/Spin";
+import { useSheetConfig } from "@/hooks/useSheetConfig";
 import type { CityResult, CityScrapeConfig, ThemeClasses } from "@/types/price-scraper";
 
-export function CityInputCard<T extends CityResult>({ t, text, setText, isScraping, parsedCount, config, onScrape }: {
+// Google Sheets icon
+function SheetsIcon() {
+  return (
+    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M19 3H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V5a2 2 0 00-2-2zm-7 3h2v2h-2V6zm0 4h2v2h-2v-2zm0 4h2v2h-2v-2zm-4-8h2v2H8V6zm0 4h2v2H8v-2zm0 4h2v2H8v-2zm8-8h2v2h-2V6zm0 4h2v2h-2v-2zm0 4h2v2h-2v-2z"/>
+    </svg>
+  );
+}
+
+export function CityInputCard<T extends CityResult>({ t, dark, text, setText, isScraping, parsedCount, config, onScrape }: {
   t: ThemeClasses;
+  dark: boolean;
   text: string;
   setText: Dispatch<SetStateAction<string>>;
   isScraping: boolean;
@@ -13,18 +24,34 @@ export function CityInputCard<T extends CityResult>({ t, text, setText, isScrapi
   config: CityScrapeConfig<T>;
   onScrape: () => void;
 }) {
+  const sheets = useSheetConfig();
+  const sheetUrl = sheets[config.brand];
+  const cityCount = config.cities.length;
+
   return (
     <div className={`${t.card} border ${t.border} rounded-2xl p-8 shadow-sm`}>
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-start justify-between mb-4 gap-4">
         <div>
           <h2 className="text-2xl font-bold"><span className={config.headingBrandClass}>{config.headingBrandText}</span> — {config.headingSuffix}</h2>
           <p className={`mt-1 text-sm ${t.muted}`}>{config.description}</p>
         </div>
+        {sheetUrl && (
+          <a
+            href={sheetUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Open Google Sheet"
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all border shrink-0 ${dark ? "border-neutral-700 bg-neutral-800 hover:bg-neutral-700 text-neutral-200" : "border-neutral-300 bg-white hover:bg-neutral-50 text-neutral-700"}`}
+          >
+            <SheetsIcon />
+            View Sheet
+          </a>
+        )}
       </div>
       <textarea value={text} onChange={e => setText(e.target.value)} placeholder={config.placeholder} rows={4}
         className={`w-full rounded-xl px-4 py-3 text-sm font-mono border focus:outline-none focus:ring-2 ${config.focusRingClass} resize-y ${t.input}`} disabled={isScraping} />
       <div className="flex items-center justify-between mt-4">
-        <p className={`text-xs ${t.muted}`}>{parsedCount} product ID(s) × 10 cities = {parsedCount * 10} requests</p>
+        <p className={`text-xs ${t.muted}`}>{parsedCount} product ID(s) × {cityCount} cities = {parsedCount * cityCount} requests</p>
         <button onClick={onScrape} disabled={isScraping || !parsedCount}
           className={`${config.buttonClass} px-6 py-3 rounded-xl font-medium text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2`}>
           {isScraping ? <><Spin /> Scraping...</> : config.buttonText}
