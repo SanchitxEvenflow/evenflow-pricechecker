@@ -27,7 +27,7 @@ const blinkitConfig: CityScrapeConfig<BlinkitResult> = {
   buttonClass: "bg-[#F8CB46] hover:bg-[#e5b93d] text-black",
   buttonText: "Scrape All Cities",
   resultsTitle: `Results — ${BLINKIT_CITIES.length} Cities`,
-  totalRequestsMultiplierText: "10",
+  progressColor: "bg-[#F8CB46]",
   getCellLabel: result => result.status.replace("_", " "),
   statusColor: blinkitStatusColor,
 };
@@ -47,7 +47,7 @@ const zeptoConfig: CityScrapeConfig<ZeptoResult> = {
   buttonClass: "bg-[#FF3269] hover:bg-[#e02b5c] text-white",
   buttonText: "Scrape All Cities",
   resultsTitle: `Results — ${ZEPTO_CITIES.length} Cities`,
-  totalRequestsMultiplierText: "9",
+  progressColor: "bg-[#FF3269]",
   getCellLabel: result => (result.error_message || result.status).replace(/_/g, " "),
   statusColor: zeptoStatusColor,
 };
@@ -67,7 +67,7 @@ const instamartConfig: CityScrapeConfig<InstamartResult> = {
   buttonClass: "bg-[#FC8019] hover:bg-[#e06b0b] text-white",
   buttonText: "Scrape All Cities",
   resultsTitle: `Results — ${INSTAMART_CITIES.length} Cities`,
-  totalRequestsMultiplierText: "8",
+  progressColor: "bg-[#FC8019]",
   getCellLabel: result => (result.error_message || result.status).replace(/_/g, " "),
   statusColor: instamartStatusColor,
 };
@@ -78,7 +78,7 @@ export default function App() {
 
   return (
     <AppShell dark={dark} t={t}>
-      <Header dark={dark} setDark={setDark} t={t} page={page} />
+      <Header dark={dark} setDark={setDark} page={page} />
       {page === "scheduler" ? (
         <SchedulerPage t={t} dark={dark} />
       ) : page === "flipkart" ? (

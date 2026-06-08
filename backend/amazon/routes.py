@@ -14,7 +14,6 @@ from pydantic import BaseModel
 
 from amazon.scraper import scrape_amazon
 from schemas.price import AmazonRequest, AmazonResponse
-from utils.google_sheets import GoogleSheetsClient
 from utils.scrape_helpers import CHUNK_SIZE, SCRAPE_CONCURRENCY, format_update
 
 logger = logging.getLogger(__name__)

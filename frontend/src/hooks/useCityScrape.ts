@@ -38,15 +38,28 @@ export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>)
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n"); buffer = lines.pop() || "";
+        
+        const chunkUpdates: any[] = [];
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
-          const d = JSON.parse(line.slice(6));
-          if (d.done) continue;
-          if (d.status === "error") fail++; else suc++;
+          try {
+            const d = JSON.parse(line.slice(6));
+            if (d.done) continue;
+            if (d.status === "error") fail++; else suc++;
+            chunkUpdates.push(d);
+          } catch (e) {
+            // Silently skip malformed JSON events instead of aborting
+            continue;
+          }
+        }
+
+        if (chunkUpdates.length > 0) {
           setResults(prev => {
             const next = { ...prev };
-            if (!next[d.product_id]) next[d.product_id] = {};
-            next[d.product_id] = { ...next[d.product_id], [d.city]: d };
+            for (const d of chunkUpdates) {
+              if (!next[d.product_id]) next[d.product_id] = {};
+              next[d.product_id] = { ...next[d.product_id], [d.city]: d };
+            }
             return next;
           });
           setStats({ total: ids.length * config.cities.length, done: suc + fail, success: suc, failed: fail });

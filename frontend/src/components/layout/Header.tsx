@@ -2,9 +2,9 @@
 
 import Image from "next/image";
 import type { Dispatch, SetStateAction } from "react";
-import type { PageKey, ThemeClasses } from "@/types/price-scraper";
+import type { PageKey } from "@/types/price-scraper";
 
-export function Header({ dark, setDark, page }: { dark: boolean; setDark: Dispatch<SetStateAction<boolean>>; t: ThemeClasses; page: PageKey }) {
+export function Header({ dark, setDark, page }: { dark: boolean; setDark: Dispatch<SetStateAction<boolean>>; page: PageKey }) {
   return (
     <header className="sticky top-0 z-20 border-b border-neutral-800 bg-neutral-950 text-neutral-100">
       <div className="max-w-6xl mx-auto px-6 py-4 flex justify-between items-center">
