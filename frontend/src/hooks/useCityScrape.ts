@@ -7,6 +7,7 @@ import { errorMessage } from "@/lib/errors";
 import { parseUniqueTokens } from "@/lib/parsers";
 import type { SheetProduct } from "@/components/shared/ProductPicker";
 import type { CityResult, CityScrapeConfig } from "@/types/price-scraper";
+import { useCachedProducts } from "@/hooks/useCachedProducts";
 
 export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>) {
   const [idText, setIdText] = useState("");
@@ -14,18 +15,8 @@ export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>)
   const [isScraping, setIsScraping] = useState(false);
   const [error, setError] = useState("");
   const [stats, setStats] = useState({ total: 0, done: 0, success: 0, failed: 0 });
-  const [sheetProducts, setSheetProducts] = useState<SheetProduct[]>([]);
-  const [productsLoading, setProductsLoading] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-
-  useEffect(() => {
-    setProductsLoading(true);
-    fetch(`${API}/price/${config.brand}/products`)
-      .then(r => r.ok ? r.json() : [])
-      .then(data => setSheetProducts(Array.isArray(data) ? data : []))
-      .catch(() => {})
-      .finally(() => setProductsLoading(false));
-  }, [config.brand]);
+  const { data: sheetProducts, loading: productsLoading } = useCachedProducts(`${API}/price/${config.brand}/products`);
 
   const toggleProduct = (id: string) =>
     setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);

@@ -6,6 +6,7 @@ import { csvEscape, downloadCsv } from "@/lib/csv";
 import { errorMessage } from "@/lib/errors";
 import { parseUniqueTokens } from "@/lib/parsers";
 import type { FlipkartScrapeResult } from "@/types/price-scraper";
+import { useCachedProducts } from "@/hooks/useCachedProducts";
 
 export function useFlipkartManualScrape() {
   const [fsnText, setFsnText] = useState("");
@@ -13,18 +14,8 @@ export function useFlipkartManualScrape() {
   const [isScraping, setIsScraping] = useState(false);
   const [error, setError] = useState("");
   const [stats, setStats] = useState({ total: 0, processed: 0, remaining: 0, success: 0, failed: 0 });
-  const [sheetProducts, setSheetProducts] = useState<any[]>([]);
-  const [productsLoading, setProductsLoading] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-
-  useEffect(() => {
-    setProductsLoading(true);
-    fetch(`${API}/sheets/flipkart/products`)
-      .then(r => r.ok ? r.json() : [])
-      .then(data => setSheetProducts(Array.isArray(data) ? data : []))
-      .catch(() => {})
-      .finally(() => setProductsLoading(false));
-  }, []);
+  const { data: sheetProducts, loading: productsLoading } = useCachedProducts(`${API}/sheets/flipkart/products`);
 
   const toggleProduct = (id: string) =>
     setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);

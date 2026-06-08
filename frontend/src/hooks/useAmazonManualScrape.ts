@@ -6,6 +6,7 @@ import { csvEscape, downloadCsv } from "@/lib/csv";
 import { errorMessage } from "@/lib/errors";
 import { parseUniqueUppercaseTokens } from "@/lib/parsers";
 import type { RatingBreakdown, ScrapeResult } from "@/types/price-scraper";
+import { useCachedProducts } from "@/hooks/useCachedProducts";
 
 export function useAmazonManualScrape() {
   const [asinText, setAsinText] = useState("");
@@ -13,18 +14,8 @@ export function useAmazonManualScrape() {
   const [isScraping, setIsScraping] = useState(false);
   const [error, setError] = useState("");
   const [stats, setStats] = useState({ total: 0, processed: 0, remaining: 0, success: 0, failed: 0 });
-  const [sheetProducts, setSheetProducts] = useState<any[]>([]);
-  const [productsLoading, setProductsLoading] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-
-  useEffect(() => {
-    setProductsLoading(true);
-    fetch(`${API}/sheets/amazon/products`)
-      .then(r => r.ok ? r.json() : [])
-      .then(data => setSheetProducts(Array.isArray(data) ? data : []))
-      .catch(() => {})
-      .finally(() => setProductsLoading(false));
-  }, []);
+  const { data: sheetProducts, loading: productsLoading } = useCachedProducts(`${API}/sheets/amazon/products`);
 
   const toggleProduct = (id: string) =>
     setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
