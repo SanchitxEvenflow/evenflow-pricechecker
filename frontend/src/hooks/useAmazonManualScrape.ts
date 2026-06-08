@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { API } from "@/lib/api";
 import { csvEscape, downloadCsv } from "@/lib/csv";
 import { errorMessage } from "@/lib/errors";
@@ -13,12 +13,27 @@ export function useAmazonManualScrape() {
   const [isScraping, setIsScraping] = useState(false);
   const [error, setError] = useState("");
   const [stats, setStats] = useState({ total: 0, processed: 0, remaining: 0, success: 0, failed: 0 });
+  const [sheetProducts, setSheetProducts] = useState<any[]>([]);
+  const [productsLoading, setProductsLoading] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    setProductsLoading(true);
+    fetch(`${API}/sheets/amazon/products`)
+      .then(r => r.ok ? r.json() : [])
+      .then(data => setSheetProducts(Array.isArray(data) ? data : []))
+      .catch(() => {})
+      .finally(() => setProductsLoading(false));
+  }, []);
+
+  const toggleProduct = (id: string) =>
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
 
   const parseAsins = parseUniqueUppercaseTokens;
 
   const handleScrape = async () => {
-    const asins = parseAsins(asinText);
-    if (asins.length === 0) { setError("Please enter at least one ASIN"); return; }
+    const asins = [...new Set([...selectedIds, ...parseAsins(asinText)])];
+    if (asins.length === 0) { setError("Please enter or select at least one ASIN"); return; }
     setError("");
     setIsScraping(true);
     setResults(asins.map(a => ({ asin: a, status: "pending" })));
@@ -99,5 +114,5 @@ export function useAmazonManualScrape() {
     downloadCsv(csvContent, `manual_scrape_${new Date().toISOString().slice(0,10)}.csv`);
   };
 
-  return { asinText, setAsinText, results, isScraping, error, stats, parseAsins, handleScrape, downloadCSV };
+  return { asinText, setAsinText, results, isScraping, error, stats, parseAsins, handleScrape, downloadCSV, sheetProducts, productsLoading, selectedIds, toggleProduct };
 }

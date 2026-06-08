@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { API } from "@/lib/api";
 import { csvEscape, downloadCsv } from "@/lib/csv";
 import { errorMessage } from "@/lib/errors";
@@ -13,12 +13,27 @@ export function useFlipkartManualScrape() {
   const [isScraping, setIsScraping] = useState(false);
   const [error, setError] = useState("");
   const [stats, setStats] = useState({ total: 0, processed: 0, remaining: 0, success: 0, failed: 0 });
+  const [sheetProducts, setSheetProducts] = useState<any[]>([]);
+  const [productsLoading, setProductsLoading] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    setProductsLoading(true);
+    fetch(`${API}/sheets/flipkart/products`)
+      .then(r => r.ok ? r.json() : [])
+      .then(data => setSheetProducts(Array.isArray(data) ? data : []))
+      .catch(() => {})
+      .finally(() => setProductsLoading(false));
+  }, []);
+
+  const toggleProduct = (id: string) =>
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
 
   const parseFsns = parseUniqueTokens;
 
   const handleScrape = async () => {
-    const fsns = parseFsns(fsnText);
-    if (fsns.length === 0) { setError("Please enter at least one FSN"); return; }
+    const fsns = [...new Set([...selectedIds, ...parseFsns(fsnText)])];
+    if (fsns.length === 0) { setError("Please enter or select at least one FSN"); return; }
     setError("");
     setIsScraping(true);
     setResults(fsns.map(f => ({ fsn: f, status: "pending" })));
@@ -72,5 +87,5 @@ export function useFlipkartManualScrape() {
     downloadCsv(csvContent, `flipkart_scrape_${new Date().toISOString().slice(0,10)}.csv`);
   };
 
-  return { fsnText, setFsnText, results, isScraping, error, stats, parseFsns, handleScrape, downloadCSV };
+  return { fsnText, setFsnText, results, isScraping, error, stats, parseFsns, handleScrape, downloadCSV, sheetProducts, productsLoading, selectedIds, toggleProduct };
 }

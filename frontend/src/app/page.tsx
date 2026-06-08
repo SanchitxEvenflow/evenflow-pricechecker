@@ -84,11 +84,11 @@ export default function App() {
       ) : page === "flipkart" ? (
         <FlipkartManualPage t={t} dark={dark} />
       ) : page === "blinkit" ? (
-        <CityScrapePage t={t} dark={dark} config={blinkitConfig} />
+        <CityScrapePage key="blinkit" t={t} dark={dark} config={blinkitConfig} />
       ) : page === "zepto" ? (
-        <CityScrapePage t={t} dark={dark} config={zeptoConfig} />
+        <CityScrapePage key="zepto" t={t} dark={dark} config={zeptoConfig} />
       ) : page === "instamart" ? (
-        <CityScrapePage t={t} dark={dark} config={instamartConfig} />
+        <CityScrapePage key="instamart" t={t} dark={dark} config={instamartConfig} />
       ) : (
         <AmazonManualPage t={t} dark={dark} />
       )}
