@@ -20,10 +20,17 @@ ZEPTO_CITIES = [
     "Pune", "Ahmedabad", "Chennai", "Dehradun",
 ]
 
+# Canonical city order — must match instamart/locations.py coverage.
+INSTAMART_CITIES = [
+    "Bangalore", "NCR", "Mumbai", "Hyderabad", "Kolkata",
+    "Pune", "Ahmedabad", "Chennai",
+]
+
 
 def format_breakdown(breakdown: dict | None) -> str:
     if not breakdown:
         return ""
+
     parts = []
     for star in ("5_star", "4_star", "3_star", "2_star", "1_star"):
         val = breakdown.get(star)
@@ -103,4 +110,31 @@ def format_flipkart_update(res: dict) -> dict:
             res.get("checked_at", ""),
         ],
     }
+
+
+def format_instamart_row(results_by_city: dict) -> list:
+    """Flatten per-city Instamart results into a single sheet row.
+
+    Returns a list of 30 values: [price, mrp, status] × 10 cities in INSTAMART_CITIES order.
+
+    Expected city result shape:
+      {
+        "price": float|None,
+        "mrp": float|None,
+        "status": str
+      }
+    """
+    values: list[str] = []
+    for city in INSTAMART_CITIES:
+        r = results_by_city.get(city, {})
+        price = r.get("price")
+        mrp = r.get("mrp")
+        status = r.get("status") or ""
+        values.extend([
+            f"{price:.2f}" if price is not None else "",
+            f"{mrp:.2f}" if mrp is not None else "",
+            status,
+        ])
+    return values
+
 

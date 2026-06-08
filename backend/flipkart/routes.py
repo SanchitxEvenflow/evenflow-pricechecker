@@ -13,7 +13,6 @@ from pydantic import BaseModel
 
 from flipkart.scraper import scrape_flipkart
 from schemas.price import FlipkartRequest, FlipkartResponse
-from utils.google_sheets import GoogleSheetsClient
 from utils.scrape_helpers import SCRAPE_CONCURRENCY
 
 logger = logging.getLogger(__name__)
@@ -108,8 +107,9 @@ async def scrape_manual_flipkart(body: ManualFSNScrapeRequest, request: Request)
 sheets_router = APIRouter(prefix="/sheets/flipkart", tags=["Flipkart Sheets"])
 
 
-def get_sheets_client():
-    return GoogleSheetsClient()
+def get_sheets_client(request: Request):
+    """Dependency injection for Google Sheets client."""
+    return request.app.state.sheets_client
 
 
 class FlipkartConfigResponse(BaseModel):

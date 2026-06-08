@@ -7,6 +7,7 @@ import os
 from functools import partial
 
 from fastapi import APIRouter, Request, HTTPException
+from fastapi.responses import StreamingResponse
 
 from zepto.locations import LOCATIONS, LOCATIONS_BY_CITY, CITY_NAMES
 from zepto.scraper import fetch_zepto_data
@@ -32,9 +33,9 @@ async def check_zepto_price(body: ZeptoRequest, request: Request):
 
     proxy_manager = request.app.state.proxy_manager
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(
-        None,
+        request.app.state.thread_pool,
         partial(
             fetch_zepto_data,
             item_id=body.product_id,
@@ -80,9 +81,9 @@ async def check_zepto_all_cities(body: ZeptoAllCitiesRequest, request: Request):
 
     async def worker(product_id: str, loc: dict) -> None:
         async with sem:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(
-                None,
+                request.app.state.thread_pool,
                 partial(
                     fetch_zepto_data,
                     item_id=product_id,

@@ -14,6 +14,7 @@ import os
 import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
+from concurrent.futures import ThreadPoolExecutor
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
@@ -30,6 +31,7 @@ from flipkart.routes import manual_router as flipkart_manual_router
 from flipkart.routes import sheets_router as flipkart_sheets_router
 from blinkit.routes import router as blinkit_router
 from zepto.routes import router as zepto_router
+from instamart.routes import router as instamart_router
 # from scheduler import setup_scheduler  # cron disabled
 from schemas.price import (
     AmazonResponse,
@@ -38,8 +40,11 @@ from schemas.price import (
     FlipkartResponse,
     HealthResponse,
 )
+
 from amazon.scraper import scrape_amazon
 from flipkart.scraper import scrape_flipkart
+from utils.google_sheets import GoogleSheetsClient
+from utils.scrape_helpers import SCRAPE_CONCURRENCY
 
 load_dotenv()
 
@@ -84,6 +89,10 @@ async def lifespan(app: FastAPI):
     app.state.proxy_manager = ProxyManager(proxy_file)
     proxy_status = app.state.proxy_manager.status()
     logger.info("Proxy pool: %d active, %d dead", proxy_status["active"], proxy_status["dead"])
+
+    # Initialize Google Sheets client and Thread Pool
+    app.state.sheets_client = GoogleSheetsClient()
+    app.state.thread_pool = ThreadPoolExecutor(max_workers=SCRAPE_CONCURRENCY * 3)
 
     # Launch Playwright browser
     headless = os.getenv("PLAYWRIGHT_HEADLESS", "true").lower() == "true"
@@ -154,7 +163,7 @@ async def lifespan(app: FastAPI):
         "progress": None,
         "error": None,
     }
-    app.state.flipkart_cron_status = {
+    app.state.instamart_cron_status = {
         "is_running": False,
         "last_run_at": None,
         "last_run_tab": None,
@@ -164,6 +173,7 @@ async def lifespan(app: FastAPI):
         "progress": None,
         "error": None,
     }
+
     # app.state.cron_scheduler = setup_scheduler(app)  # cron disabled
     # if app.state.cron_scheduler:
     #     logger.info("Cron scheduler active — interval=%s min", os.getenv("CRON_INTERVAL_MINUTES", "60"))
@@ -177,6 +187,9 @@ async def lifespan(app: FastAPI):
     if getattr(app.state, "cron_scheduler", None):
         app.state.cron_scheduler.shutdown(wait=False)
         logger.info("Cron scheduler stopped")
+    if getattr(app.state, "thread_pool", None):
+        app.state.thread_pool.shutdown(wait=False)
+        logger.info("Thread pool stopped")
     if browser:
         try:
             await browser.close()
@@ -243,7 +256,42 @@ app.include_router(flipkart_manual_router)
 app.include_router(flipkart_sheets_router)
 app.include_router(blinkit_router, prefix="/price", tags=["blinkit"])
 app.include_router(zepto_router, prefix="/price", tags=["zepto"])
+app.include_router(instamart_router, prefix="/price", tags=["instamart"])
 
+
+# ── Config endpoint (exposes sheet links to the static frontend) ─────────────
+
+@app.get("/config")
+async def get_config():
+    """Return public configuration — Google Sheet URLs per platform.
+    The frontend fetches this once on load to build 'View Sheet' links.
+    """
+    def sheet_url(sheet_id: str) -> str | None:
+        if not sheet_id:
+            return None
+        return f"https://docs.google.com/spreadsheets/d/{sheet_id}"
+
+    return {
+        "sheets": {
+            "amazon":    sheet_url(os.getenv("SPREADSHEET_ID", "")),
+            "flipkart":  sheet_url(os.getenv("FLIPKART_SHEET_ID", "")),
+            "blinkit":   sheet_url(os.getenv("BLINKIT_SHEET_ID", "")),
+            "zepto":     sheet_url(os.getenv("ZEPTO_SHEET_ID", "")),
+            "instamart": sheet_url(os.getenv("INSTAMART_SHEET_ID", "")),
+        }
+    }
+
+
+@app.get("/cron-status/all")
+async def get_all_cron_status(request: Request):
+    """Return cron status for all 5 scrapers in a single response."""
+    return {
+        "amazon": dict(getattr(request.app.state, "cron_status", {})),
+        "flipkart": dict(getattr(request.app.state, "flipkart_cron_status", {})),
+        "blinkit": dict(getattr(request.app.state, "blinkit_cron_status", {})),
+        "zepto": dict(getattr(request.app.state, "zepto_cron_status", {})),
+        "instamart": dict(getattr(request.app.state, "instamart_cron_status", {})),
+    }
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
