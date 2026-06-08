@@ -451,14 +451,35 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
             mrp = _extract_text(soup, MRP_SELECTORS)
             rating = _extract_rating(soup)
             rating_count = _extract_rating_count(soup)
+
+            # Extract BSR + category from Playwright HTML (already loaded successfully)
+            bsr_data = _extract_best_seller_rank(soup)
+            category_data = _extract_category_hierarchy(soup)
+
+            # curl gets no-JS static HTML which has the ratings histogram; try it for breakdown
+            # and supplement any BSR/category fields still missing
             curl_data = await _fetch_curl_data(asin)
+
+            breakdown = {k: curl_data[k] for k in ("5_star", "4_star", "3_star", "2_star", "1_star")}
+            if not any(breakdown.values()):
+                breakdown = _extract_rating_breakdown(soup)
+
+            rank_value = bsr_data["rank_value"] or curl_data.get("rank_value")
+            rank_raw = bsr_data["rank_raw"] or curl_data.get("rank_raw")
+            rank_category = bsr_data["rank_category"] or curl_data.get("rank_category")
+            sub_rank_value = bsr_data["sub_rank_value"] or curl_data.get("sub_rank_value")
+            sub_rank_category = bsr_data["sub_rank_category"] or curl_data.get("sub_rank_category")
+            parent_node = category_data["parent_node"] or curl_data.get("parent_node")
+            child_node = category_data["child_node"] or curl_data.get("child_node")
+            category_path = category_data["category_path"] or curl_data.get("category_path")
 
             buy_button = soup.select_one("#add-to-cart-button") or soup.select_one("#buy-now-button")
             final_status = "available" if (price and buy_button) else "price_found"
 
             proxy_manager.report_success(proxy)
 
-            logger.info("Amazon scraped ASIN %s: price=%s, rating=%s, status=%s", asin, price, rating, final_status)
+            logger.info("Amazon scraped ASIN %s: price=%s, rating=%s, rank=%s, parent=%s, status=%s",
+                        asin, price, rating, rank_value, parent_node, final_status)
 
             return {
                 "asin": asin,
@@ -466,15 +487,15 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
                 "mrp": mrp,
                 "rating": rating,
                 "rating_count": rating_count,
-                "rating_breakdown": {k: curl_data[k] for k in ("5_star", "4_star", "3_star", "2_star", "1_star")},
-                "rank_raw": curl_data["rank_raw"],
-                "rank_value": curl_data["rank_value"],
-                "rank_category": curl_data["rank_category"],
-                "sub_rank_value": curl_data["sub_rank_value"],
-                "sub_rank_category": curl_data["sub_rank_category"],
-                "parent_node": curl_data["parent_node"],
-                "child_node": curl_data["child_node"],
-                "category_path": curl_data["category_path"],
+                "rating_breakdown": breakdown,
+                "rank_raw": rank_raw,
+                "rank_value": rank_value,
+                "rank_category": rank_category,
+                "sub_rank_value": sub_rank_value,
+                "sub_rank_category": sub_rank_category,
+                "parent_node": parent_node,
+                "child_node": child_node,
+                "category_path": category_path,
                 "status": final_status,
                 "platform": "amazon",
                 "url": url,
