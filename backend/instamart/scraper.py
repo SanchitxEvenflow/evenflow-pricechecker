@@ -180,7 +180,7 @@ async def fetch_instamart_data(
                     continue
                 return _error_result("state_script_not_found")
 
-            match = re.search(r"(\{.*\})", target_script, re.DOTALL)
+            match = re.search(r"window\.___INITIAL_STATE___\s*=\s*(.*?);\s*(?:window\.|var\s|let\s|const\s)", target_script, re.DOTALL)
             if not match:
                 logger.warning("[Instamart] %s: failed to regex JSON from script", city)
                 if proxy_manager:

@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from flipkart.scraper import scrape_flipkart
 from schemas.price import FlipkartRequest, FlipkartResponse
+from utils.google_sheets import GoogleSheetsClient
 from utils.scrape_helpers import SCRAPE_CONCURRENCY
 
 logger = logging.getLogger(__name__)
