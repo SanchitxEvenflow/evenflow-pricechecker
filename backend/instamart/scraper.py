@@ -1,19 +1,15 @@
-"""Instamart quick-commerce scraper.
-
-Fetches product data from Swiggy Instamart BFF/widgets API.
+"""
+instamart/scraper.py
+Playwright headful scraper for Instamart to bypass strict AWS WAF limits.
+Extracts pricing from the DOM's embedded JSON state.
 """
 
-from __future__ import annotations
-
 import logging
-import os
-import random
-import uuid
+import json
+import re
+import threading
 from datetime import datetime, timezone, timedelta
-from typing import Any
-
-import requests
-from curl_cffi.requests.errors import RequestsError
+from playwright.sync_api import sync_playwright
 
 from proxy.manager import ProxyManager
 
@@ -21,278 +17,152 @@ logger = logging.getLogger(__name__)
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
-INSTAMART_PRODUCT_BASE_URL = "https://www.swiggy.com/instamart/item/{item_id}"
-INSTAMART_WIDGETS_URL = (
-    "https://www.swiggy.com/api/instamart/item/v2/{product_id}/widgets"
-    "?storeId={store_id}&primaryStoreId={store_id}&secondaryStoreId="
-)
-
-
-def _now_iso() -> str:
-    return datetime.now(IST).isoformat()
-
-
-def _to_rupees(maybe_paise_or_price: Any) -> float | None:
-    if maybe_paise_or_price is None:
-        return None
-    try:
-        # API might return numeric or string.
-        v = float(maybe_paise_or_price)
-        # Heuristic: paise are usually integers like 91000.
-        if v.is_integer() and v > 1000:
-            return round(v / 100.0, 2)
-        return round(v, 2)
-    except (ValueError, TypeError):
-        return None
-
-
-def _error_result(item_id: str, city: str, url: str, checked_at: str, status: str, msg: str | None = None) -> dict:
-    return {
-        "product_id": item_id,
-        "city": city,
-        "title": None,
-        "price": None,
-        "mrp": None,
-        "status": status,
-        "is_sold_out": status == "out_of_stock",
-        "url": url,
-        "checked_at": checked_at,
-        "error_message": msg,
-    }
-
-
-def _build_headers(item_id: str, store_id: str, lat: float, lon: float, address: str, pincode: str | None) -> dict[str, str]:
-    # Browser-like headers. Cookie/session values are carried via env vars.
-    user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-
-    cookie = os.getenv("INSTAMART_COOKIE", "")
-    matcher = os.getenv("INSTAMART_MATCHER", "")
-
-    # Volatile IDs.
-    device_id = os.getenv("INSTAMART_DEVICE_ID") or str(uuid.uuid4())
-    x_build_version = os.getenv("INSTAMART_BUILD_VERSION", "2.347.0")
-
-    # Swiggy often expects a matcher param.
-    # We put matcher and cookie behind env vars; we do NOT hardcode pasted full cookie strings in source.
-
-    headers = {
-        "User-Agent": user_agent,
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": INSTAMART_PRODUCT_BASE_URL.format(item_id=item_id),
-        "content-type": "application/json",
-        "x-build-version": str(x_build_version),
-        "x-device-id": str(device_id),
-        # Some WAFs key off matcher header.
-        "matcher": str(matcher),
-        # location hints (custom headers may be ignored but help).
-        "x-lat": str(lat),
-        "x-lng": str(lon),
-        "x-address": address,
-    }
-
-    if pincode:
-        headers["x-pincode"] = str(pincode)
-
-    if cookie:
-        headers["cookie"] = cookie
-
-    # Optional anti-bot session cookies.
-    return headers
-
+_instamart_lock = threading.Lock()
 
 def fetch_instamart_data(
     item_id: str,
+    pincode: str,
     lat: float,
     lon: float,
     city: str,
     store_id: str,
-    address: str,
-    pincode: str | None = None,
     proxy_manager: ProxyManager | None = None,
 ) -> dict:
-    """Fetch Instamart widgets for a single city.
+    product_url = f"https://www.swiggy.com/instamart/item/{item_id}"
+    now = datetime.now(IST).isoformat()
 
-    Instamart scraping contract:
-    - product url: https://www.swiggy.com/instamart/item/{product_id}
-    - widgets api: /api/instamart/item/v2/{product_id}/widgets?storeId=...&primaryStoreId=...&secondaryStoreId=
-    """
+    def _error_result(msg: str = "error") -> dict:
+        return {
+            "product_id": item_id,
+            "city": city,
+            "title": None,
+            "price": None,
+            "mrp": None,
+            "status": "error",
+            "is_sold_out": False,
+            "url": product_url,
+            "checked_at": now,
+            "error_message": msg,
+        }
 
-    checked_at = _now_iso()
-    product_url = INSTAMART_PRODUCT_BASE_URL.format(item_id=item_id)
+    if store_id == "TODO" or not store_id:
+        print(f"[Instamart] {city}: SKIPPED -- store_id not configured in locations.py")
+        return _error_result("missing_store_id")
 
-    if not store_id:
-        return _error_result(item_id, city, product_url, checked_at, "unserviceable", "missing_store_id")
-
-    headers = _build_headers(item_id, store_id, lat, lon, address, pincode)
-    headers["Referer"] = f"https://www.swiggy.com/instamart/item/{item_id}"
-
-    widgets_url = INSTAMART_WIDGETS_URL.format(product_id=item_id, store_id=store_id)
-
-    max_proxy_attempts = min(
-        int(os.getenv("INSTAMART_CONCURRENCY", "5")),
-        len(proxy_manager.active_pool) if proxy_manager else 0,
-        3,
-    )
-
-    def _parse_widgets(payload: dict[str, Any]) -> tuple[str | None, float | None, float | None, str, bool]:
-        """Defensively search widgets payload for title/price/mrp/availability."""
-
-        title: str | None = None
-        price: float | None = None
-        mrp: float | None = None
-        is_sold_out: bool = False
-
-        possible_title_keys = {"title", "productTitle", "name"}
-        price_keys = {"price", "sellingPrice", "discountedSellingPrice", "superSaverSellingPrice"}
-        mrp_keys = {"mrp", "listPrice"}
-        sold_out_keys = {"isSoldOut", "outOfStock", "is_sold_out"}
-
-        def walk(obj: Any):
-            if isinstance(obj, dict):
-                yield obj
-                for v in obj.values():
-                    yield from walk(v)
-            elif isinstance(obj, list):
-                for v in obj:
-                    yield from walk(v)
-
-        for d in walk(payload):
-            if title is None:
-                for k in possible_title_keys:
-                    val = d.get(k)
-                    if val:
-                        title = str(val)
-                        break
-
-            if price is None:
-                for k in price_keys:
-                    if k in d and d.get(k) is not None:
-                        price = _to_rupees(d.get(k))
-                        break
-
-            if mrp is None:
-                for k in mrp_keys:
-                    if k in d and d.get(k) is not None:
-                        mrp = _to_rupees(d.get(k))
-                        break
-
-            for k in sold_out_keys:
-                if k in d:
-                    v = d.get(k)
-                    if isinstance(v, str):
-                        is_sold_out = v.lower() in ("true", "1", "yes")
-                    else:
-                        is_sold_out = bool(v)
-                    break
-
-        # Status mapping
-        if is_sold_out:
-            status = "out_of_stock"
-        else:
-            status = "available" if price is not None else "error"
-
-        return title, price, mrp, status, is_sold_out
-
-    for attempt in range(max_proxy_attempts + 1):
-        proxy = None
-        if attempt < max_proxy_attempts and proxy_manager:
-            proxy = proxy_manager.get_proxy()
-        proxies = {"http": proxy, "https": proxy} if proxy else None
-
-        session = requests.Session()
+    with _instamart_lock:
+        print(f"[Instamart] {city}: ACQUIRED LOCK, scraping item={item_id}")
         try:
-            delay_min = float(os.getenv("INSTAMART_DELAY_MIN", "1.0"))
-            delay_max = float(os.getenv("INSTAMART_DELAY_MAX", "3.0"))
-            if delay_max > 0:
-                delay = random.uniform(delay_min, delay_max)
-                if delay > 0.01:
-                    import time
-                    time.sleep(delay)
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=False)
+                context = browser.new_context()
+                
+                # Inject the cookies for the target city
+                context.add_cookies([
+                    {"name": "lat", "value": str(lat), "domain": ".swiggy.com", "path": "/"},
+                    {"name": "lng", "value": str(lon), "domain": ".swiggy.com", "path": "/"},
+                    {"name": "storeId", "value": str(store_id), "domain": ".swiggy.com", "path": "/"}
+                ])
+                
+                page = context.new_page()
+                
+                # Navigate to the product page. domcontentloaded is much faster than networkidle
+                page.goto(product_url, wait_until="domcontentloaded", timeout=60000)
+                
+                content = page.content()
+                browser.close()
+                
 
-            resp = session.get(widgets_url, headers=headers, proxies=proxies, timeout=20)
+                # Find all script tags
+                scripts = re.findall(r'<script.*?>(.*?)</script>', content, re.DOTALL)
+                target_script = None
+                for s in scripts:
+                    if item_id in s and 'window.___INITIAL_STATE___' in s:
+                        target_script = s
+                        break
+                        
+                if not target_script:
+                    print(f"[Instamart] {city}: Embedded state script not found")
+                    return _error_result("state_script_not_found")
+                    
+                match = re.search(r'(\{.*\})', target_script)
+                if not match:
+                    print(f"[Instamart] {city}: Failed to regex JSON from script")
+                    return _error_result("json_regex_failed")
+                    
+                try:
+                    data = json.loads(match.group(1))
+                except json.JSONDecodeError:
+                    print(f"[Instamart] {city}: Invalid JSON decode")
+                    return _error_result("invalid_json")
+                    
+                def find_items(obj, tgt_id):
+                    results = []
+                    if isinstance(obj, dict):
+                        if obj.get('productId') == tgt_id:
+                            results.append(obj)
+                        for k, v in obj.items():
+                            results.extend(find_items(v, tgt_id))
+                    elif isinstance(obj, list):
+                        for item in obj:
+                            results.extend(find_items(item, tgt_id))
+                    return results
 
-            if resp.status_code == 404:
-                if proxy_manager and proxy:
-                    proxy_manager.report_success(proxy)
-                return _error_result(item_id, city, product_url, checked_at, "not_found", "http_404")
+                items = find_items(data, item_id)
+                if not items:
+                    print(f"[Instamart] {city}: item_not_found_in_state")
+                    return _error_result("item_not_found_in_state")
 
-            if resp.status_code in (401, 403, 429):
-                if proxy_manager and proxy:
-                    proxy_manager.report_failure(proxy)
-                if attempt < max_proxy_attempts:
-                    continue
-                return _error_result(item_id, city, product_url, checked_at, "error", f"blocked_{resp.status_code}")
+                v = items[0]
+                
+                title = v.get("displayName", "Unknown Product")
+                
+                if "variations" in v and v["variations"]:
+                    v = v["variations"][0]
+                    title = v.get("displayName", title)
+                    
+                price_obj = v.get("price", {})
+                price = None
+                mrp = None
+                is_sold_out = False
+                status = "error"
+                
+                if price_obj:
+                    o_price = price_obj.get("offerPrice", {}).get("units")
+                    if o_price:
+                        price = float(o_price)
+                    m_price = price_obj.get("mrp", {}).get("units")
+                    if m_price:
+                        mrp = float(m_price)
+                        
+                inventory = v.get("inventory", {})
+                if not inventory.get("inStock", False):
+                    is_sold_out = True
+                    status = "out_of_stock"
+                else:
+                    status = "available"
+                    
+                if not mrp and price:
+                    mrp = price
 
-            if resp.status_code != 200:
-                if proxy_manager and proxy:
-                    proxy_manager.report_failure(proxy)
-                if attempt < max_proxy_attempts:
-                    continue
-                return _error_result(item_id, city, product_url, checked_at, "error", f"http_{resp.status_code}")
+                if price is None and not is_sold_out:
+                    print(f"[Instamart] {city}: extraction failed (no price, not sold out)")
+                    return _error_result("extraction_failed")
 
-            try:
-                payload = resp.json()
-            except Exception as e:
-                if proxy_manager and proxy:
-                    proxy_manager.report_failure(proxy)
-                if attempt < max_proxy_attempts:
-                    continue
-                return _error_result(item_id, city, product_url, checked_at, "error", f"json_parse_error: {e}")
+                print(f"[Instamart] {city}: OK -- {title} = Rs.{price} (MRP Rs.{mrp})")
 
-            title, price, mrp, status, is_sold_out = _parse_widgets(payload)
-
-            if status == "available":
                 return {
                     "product_id": item_id,
                     "city": city,
                     "title": title,
                     "price": price,
                     "mrp": mrp,
-                    "status": "available",
-                    "is_sold_out": False,
+                    "status": status,
+                    "is_sold_out": is_sold_out,
                     "url": product_url,
-                    "checked_at": checked_at,
-                    "error_message": None,
+                    "checked_at": now,
                 }
 
-            if status == "out_of_stock":
-                return {
-                    "product_id": item_id,
-                    "city": city,
-                    "title": title,
-                    "price": None,
-                    "mrp": mrp,
-                    "status": "out_of_stock",
-                    "is_sold_out": True,
-                    "url": product_url,
-                    "checked_at": checked_at,
-                    "error_message": None,
-                }
-
-            # Not found-ish / parse failures
-            if proxy_manager and proxy:
-                proxy_manager.report_success(proxy)
-            return _error_result(item_id, city, product_url, checked_at, "error", "parse_failed_or_unexpected")
-
-        except (RequestsError, TimeoutError) as e:
-            if proxy_manager and proxy:
-                proxy_manager.report_failure(proxy)
-            if attempt < max_proxy_attempts:
-                continue
-            return _error_result(item_id, city, product_url, checked_at, "error", f"network_error: {e}")
         except Exception as e:
-            if proxy_manager and proxy:
-                proxy_manager.report_failure(proxy)
-            if attempt < max_proxy_attempts:
-                continue
-            return _error_result(item_id, city, product_url, checked_at, "error", f"unexpected: {e}")
-        finally:
-            try:
-                session.close()
-            except Exception:
-                pass
-
-    return _error_result(item_id, city, product_url, checked_at, "error", "max_retries_exceeded")
-
-
+            logger.error("Unexpected error for item_id=%s: %s", item_id, e)
+            print(f"[Instamart] {city}: UNEXPECTED ERROR: {e}")
+            return _error_result(f"unexpected: {e}")
