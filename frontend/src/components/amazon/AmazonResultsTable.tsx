@@ -1,0 +1,57 @@
+import { Badge } from "@/components/shared/Badge";
+import type { RatingBreakdown, ScrapeResult, ThemeClasses } from "@/types/price-scraper";
+
+export function AmazonResultsTable({ t, results, onDownloadCSV }: { t: ThemeClasses; results: ScrapeResult[]; onDownloadCSV: () => void }) {
+  if (results.length === 0) return null;
+  return (
+    <div className={`${t.card} border ${t.border} rounded-2xl overflow-hidden shadow-sm`}>
+      <div className={`flex items-center justify-between px-6 py-4 border-b ${t.border}`}>
+        <p className={`text-xs font-semibold uppercase tracking-wider ${t.muted}`}>Scrape Results</p>
+        <button onClick={onDownloadCSV} className={`px-3 py-1.5 rounded-lg text-xs font-medium ${t.btnSecondary} transition-all flex items-center gap-2`}>
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+          Download CSV
+        </button>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-left border-collapse">
+          <thead>
+            <tr className={`border-b ${t.border} ${t.thead}`}>
+              {["ASIN", "Status", "Price", "Rating", "Rating Count", "Rating Breakdown", "Parent Node", "Parent Rank", "Child Node", "Child Rank", "URL"].map(h => (
+                <th key={h} className={`px-4 py-4 text-xs font-semibold ${t.muted} uppercase tracking-wider`}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className={`divide-y ${t.border}`}>
+            {results.map(r => {
+              const bd = r.rating_breakdown;
+              const bdStr = bd
+                ? ["5_star","4_star","3_star","2_star","1_star"]
+                    .map(k => bd[k as keyof RatingBreakdown] ? `${k[0]}★:${bd[k as keyof RatingBreakdown]}` : null)
+                    .filter(Boolean).join(" ")
+                : null;
+              return (
+                <tr key={r.asin} className="transition-colors">
+                  <td className="px-4 py-4 whitespace-nowrap text-sm font-medium font-mono">{r.asin}</td>
+                  <td className="px-4 py-4 whitespace-nowrap text-sm"><Badge status={r.status} /></td>
+                  <td className={`px-4 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.price || "—"}</td>
+                  <td className={`px-4 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.rating ? `${r.rating} ★` : "—"}</td>
+                  <td className={`px-4 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.rating_count || "—"}</td>
+                  <td className={`px-4 py-4 text-xs ${t.muted} font-mono`}>{bdStr || "—"}</td>
+                  <td className={`px-4 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.parent_node || "—"}</td>
+                  <td className={`px-4 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.rank_value ? `#${r.rank_value}` : "—"}</td>
+                  <td className={`px-4 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.child_node || "—"}</td>
+                  <td className={`px-4 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.sub_rank_value ? `#${r.sub_rank_value}` : "—"}</td>
+                  <td className="px-4 py-4 whitespace-nowrap text-sm">
+                    <a href={`https://www.amazon.in/dp/${r.asin}`} target="_blank" rel="noopener noreferrer" className="text-[#FF9900] hover:underline flex items-center gap-1">
+                      View <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+                    </a>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}

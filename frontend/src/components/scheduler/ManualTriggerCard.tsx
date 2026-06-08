@@ -1,0 +1,79 @@
+"use client";
+
+import { Spin } from "@/components/shared/Spin";
+import type { CronStatus, ThemeClasses } from "@/types/price-scraper";
+
+const triggerConfig = {
+  amazon: {
+    color: "bg-[#FF9900] hover:bg-[#e88a00] text-black",
+    bar: "bg-[#FF9900]",
+    brandClass: "text-[#FF9900]",
+    name: "amazon",
+    description: "Run a full scrape of all ASINs from the Google Sheet. Results are written to a new tab:",
+    code: "Manual_Trigger_YYYY-MM-DD_HH-MM",
+  },
+  blinkit: {
+    color: "bg-[#F8CB46] hover:bg-[#e5b93d] text-black",
+    bar: "bg-[#F8CB46]",
+    brandClass: "text-[#F8CB46]",
+    name: "blinkit",
+    description: "Run a full scrape of all PIDs from the Blinkit Google Sheet across all 10 cities. Results are written to a new tab:",
+    code: "Blinkit_Manual_YYYY-MM-DD_HH-MM",
+  },
+  flipkart: {
+    color: "bg-[#2874F0] hover:bg-[#1a5dc8] text-white",
+    bar: "bg-[#2874F0]",
+    brandClass: "text-[#2874F0]",
+    name: "flipkart",
+    description: "Run a full scrape of all FSNs from the Flipkart Google Sheet. Results are written to a new tab:",
+    code: "Flipkart_Manual_YYYY-MM-DD_HH-MM",
+  },
+  zepto: {
+    color: "bg-[#FF3269] hover:bg-[#e02b5c] text-white",
+    bar: "bg-[#FF3269]",
+    brandClass: "text-[#FF3269]",
+    name: "zepto",
+    description: "Run a full scrape of all PIDs from the Zepto Google Sheet across all 9 cities. Results are written to a new tab:",
+    code: "Zepto_Manual_YYYY-MM-DD_HH-MM",
+  },
+};
+
+export function ManualTriggerCard({ t, dark, brand, status, isTriggering, onTrigger }: {
+  t: ThemeClasses;
+  dark: boolean;
+  brand: keyof typeof triggerConfig;
+  status: CronStatus | null;
+  isTriggering: boolean;
+  onTrigger: () => void;
+}) {
+  const cfg = triggerConfig[brand];
+  return (
+    <div className={`${t.card} border ${t.border} rounded-2xl p-8 shadow-sm`}>
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold"><span className={cfg.brandClass}>{cfg.name}</span> — Manual Trigger</h2>
+          <p className={`mt-1 text-sm ${t.muted}`}>{cfg.description} <code className={`text-xs px-1.5 py-0.5 rounded ${dark ? "bg-neutral-800" : "bg-neutral-100"}`}>{cfg.code}</code></p>
+        </div>
+        <button
+          onClick={onTrigger}
+          disabled={isTriggering || status?.is_running === true}
+          className={`${cfg.color} px-8 py-3 rounded-xl font-medium text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shrink-0`}
+        >
+          {isTriggering ? <><Spin /> Starting...</> : status?.is_running ? "Scrape Running..." : "Manual Trigger"}
+        </button>
+      </div>
+
+      {status?.is_running && status.progress != null && status.total != null && status.total > 0 && (
+        <div className="mt-6">
+          <div className="flex justify-between text-xs mb-2">
+            <span className={t.muted}>Progress</span>
+            <span className="text-blue-500 font-medium">{status.progress} / {status.total}</span>
+          </div>
+          <div className={`h-2.5 rounded-full overflow-hidden ${dark ? "bg-neutral-800" : "bg-neutral-200"}`}>
+            <div className={`h-full ${cfg.bar} rounded-full transition-all duration-500`} style={{ width: `${Math.round((status.progress / status.total) * 100)}%` }} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
