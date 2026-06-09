@@ -70,10 +70,18 @@ export function useFlipkartManualScrape() {
   const downloadCSV = () => {
     if (results.length === 0) return;
     const headers = ["FSN", "Status", "Price", "MRP", "Discount", "Rating", "Rating Count", "Fulfilled By", "URL"];
-    const rows = results.map(r => {
-      const row = [r.fsn, r.status, r.price || "", r.mrp || "", r.discount || "", r.rating || "", r.rating_count || "", r.fulfilled_by || "", r.url || ""];
-      return row.map(csvEscape).join(",");
-    });
+    const cleanNum = (v?: string) => v ? v.replace(/[₹,]/g, "") : "";
+    const rows = results.map(r => [
+      csvEscape(r.fsn),
+      csvEscape(r.status),
+      cleanNum(r.price),
+      cleanNum(r.mrp),
+      csvEscape(r.discount || ""),
+      csvEscape(r.rating || ""),
+      csvEscape(r.rating_count || ""),
+      csvEscape(r.fulfilled_by || ""),
+      csvEscape(r.url || ""),
+    ].join(","));
     const csvContent = [headers.join(","), ...rows].join("\n");
     downloadCsv(csvContent, `flipkart_scrape_${new Date().toISOString().slice(0,10)}.csv`);
   };

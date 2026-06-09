@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 
 // Global cache outside the component to persist across re-mounts
 const productCache: Record<string, any[]> = {};
-const productLoadingCache: Record<string, Promise<any[]>> = {};
+const productLoadingCache: Record<string, Promise<any[]> | undefined> = {};
 
 export function useCachedProducts(url: string) {
   // Initialize with cached data if available to avoid flicker

@@ -76,6 +76,7 @@ export function useAmazonManualScrape() {
       "Parent Node", "Parent Rank", "Child Node", "Child Rank", "URL"
     ];
 
+    const cleanNum = (v?: string | null) => v ? v.replace(/[₹,#]/g, "") : "";
     const rows = results.map(r => {
       const bd = r.rating_breakdown;
       const bdStr = bd
@@ -84,21 +85,19 @@ export function useAmazonManualScrape() {
             .filter(Boolean).join(" ")
         : "";
 
-      const row = [
-        r.asin,
-        r.status,
-        r.price || "",
-        r.rating ? `${r.rating} ★` : "",
-        r.rating_count || "",
-        bdStr,
-        r.parent_node || "",
-        r.rank_value ? `#${r.rank_value}` : "",
-        r.child_node || "",
-        r.sub_rank_value ? `#${r.sub_rank_value}` : "",
-        `https://www.amazon.in/dp/${r.asin}`
-      ];
-
-      return row.map(csvEscape).join(",");
+      return [
+        csvEscape(r.asin),
+        csvEscape(r.status),
+        cleanNum(r.price),
+        cleanNum(r.rating),
+        cleanNum(r.rating_count),
+        csvEscape(bdStr),
+        csvEscape(r.parent_node || ""),
+        cleanNum(r.rank_value),
+        csvEscape(r.child_node || ""),
+        cleanNum(r.sub_rank_value),
+        csvEscape(`https://www.amazon.in/dp/${r.asin}`),
+      ].join(",");
     });
 
     const csvContent = [headers.join(","), ...rows].join("\n");

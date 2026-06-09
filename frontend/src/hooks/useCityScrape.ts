@@ -81,12 +81,16 @@ export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>)
     if (!pids.length) return;
     const hdr = ["Product ID", ...config.cities.flatMap(c => [`${c} Price`, `${c} MRP`, `${c} Status`])];
     const rows = pids.map(pid => {
-      const cells = [pid];
+      const cells: string[] = [csvEscape(pid)];
       config.cities.forEach(c => {
         const r = results[pid]?.[c];
-        cells.push(r?.price != null ? String(r.price) : "", r?.mrp != null ? String(r.mrp) : "", r?.status || "");
+        cells.push(
+          r?.price != null ? String(r.price) : "",
+          r?.mrp != null ? String(r.mrp) : "",
+          csvEscape(r?.status || ""),
+        );
       });
-      return cells.map(csvEscape).join(",");
+      return cells.join(",");
     });
     const blob = new Blob([[hdr.join(","), ...rows].join("\n")], { type: "text/csv" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
