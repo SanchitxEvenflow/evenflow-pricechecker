@@ -1,18 +1,11 @@
 "use client";
 
-<<<<<<< HEAD
-import { useState } from "react";
-=======
 import { useEffect, useState } from "react";
->>>>>>> f3b9221745d678d06b6e9a19f66e76812a93db79
 import { API } from "@/lib/api";
 import { csvEscape } from "@/lib/csv";
 import { errorMessage } from "@/lib/errors";
 import { parseUniqueTokens } from "@/lib/parsers";
-<<<<<<< HEAD
-=======
 import type { SheetProduct } from "@/components/shared/ProductPicker";
->>>>>>> f3b9221745d678d06b6e9a19f66e76812a93db79
 import type { CityResult, CityScrapeConfig } from "@/types/price-scraper";
 
 export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>) {
@@ -21,8 +14,6 @@ export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>)
   const [isScraping, setIsScraping] = useState(false);
   const [error, setError] = useState("");
   const [stats, setStats] = useState({ total: 0, done: 0, success: 0, failed: 0 });
-<<<<<<< HEAD
-=======
   const [sheetProducts, setSheetProducts] = useState<SheetProduct[]>([]);
   const [productsLoading, setProductsLoading] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -38,19 +29,22 @@ export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>)
 
   const toggleProduct = (id: string) =>
     setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
->>>>>>> f3b9221745d678d06b6e9a19f66e76812a93db79
 
   const parseIds = parseUniqueTokens;
 
   const handleScrape = async () => {
-<<<<<<< HEAD
-    const ids = parseIds(idText);
-=======
     const ids = [...new Set([...selectedIds, ...parseIds(idText)])];
->>>>>>> f3b9221745d678d06b6e9a19f66e76812a93db79
     if (!ids.length) { setError(config.emptyInputError); return; }
     setError(""); setIsScraping(true);
-    setResults({}); setStats({ total: ids.length * config.cities.length, done: 0, success: 0, failed: 0 });
+    const initialResults: Record<string, any> = {};
+    for (const id of ids) {
+      initialResults[id] = {};
+      for (const city of config.cities) {
+        initialResults[id][city] = { status: "pending", product_id: id, city };
+      }
+    }
+    setResults(initialResults); 
+    setStats({ total: ids.length * config.cities.length, done: 0, success: 0, failed: 0 });
 
     try {
       const res = await fetch(`${API}${config.endpoint}`, {
@@ -117,9 +111,5 @@ export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>)
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
   };
 
-<<<<<<< HEAD
-  return { idText, setIdText, results, isScraping, error, stats, parseIds, handleScrape, downloadCSV };
-=======
   return { idText, setIdText, results, isScraping, error, stats, parseIds, handleScrape, downloadCSV, sheetProducts, productsLoading, selectedIds, toggleProduct };
->>>>>>> f3b9221745d678d06b6e9a19f66e76812a93db79
 }

@@ -79,7 +79,7 @@ def _cache_url(fsn: str, resolved_url: str) -> None:
 # ── JavaScript extraction snippets ──────────────────────────────────────────
 
 # This JS runs in the browser and returns all extractable product data at once
-JS_EXTRACT_ALL = """
+JS_EXTRACT_ALL = r"""
 () => {
     const result = { price: null, mrp: null, discount: null, rating: null, rating_count: null, fulfilled_by: null };
 

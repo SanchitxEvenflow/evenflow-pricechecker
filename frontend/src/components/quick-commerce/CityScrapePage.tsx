@@ -15,12 +15,8 @@ export function CityScrapePage<T extends CityResult>({ t, dark, config }: { t: T
   return (
     <main className="max-w-[95vw] mx-auto px-6 py-8 space-y-8">
       <ErrorBanner error={scrape.error} />
-<<<<<<< HEAD
-      <CityInputCard t={t} dark={dark} text={scrape.idText} setText={scrape.setIdText} isScraping={scrape.isScraping} parsedCount={parsedCount} config={config} onScrape={scrape.handleScrape} />
-=======
       <CityInputCard t={t} dark={dark} text={scrape.idText} setText={scrape.setIdText} isScraping={scrape.isScraping} parsedCount={parsedCount} config={config} onScrape={scrape.handleScrape}
         sheetProducts={scrape.sheetProducts} productsLoading={scrape.productsLoading} selectedIds={scrape.selectedIds} onToggleProduct={scrape.toggleProduct} />
->>>>>>> f3b9221745d678d06b6e9a19f66e76812a93db79
       {scrape.stats.total > 0 && (
         <StatsGrid t={t} columnsClass="grid-cols-2 md:grid-cols-4" items={[
           { label: "Total", value: scrape.stats.total, color: "" },
