@@ -36,7 +36,6 @@ async def check_instamart_price(body: InstamartRequest, request: Request):
 
     result = await fetch_instamart_data(
         item_id=body.product_id,
-        pincode=city_data["pincode"],
         lat=city_data["lat"],
         lon=city_data["lng"],
         city=body.city,
@@ -78,7 +77,6 @@ async def check_instamart_all_cities(body: InstamartAllCitiesRequest, request: R
         async with sem:
             result = await fetch_instamart_data(
                 item_id=product_id,
-                pincode=loc["pincode"],
                 lat=loc["lat"],
                 lon=loc["lng"],
                 city=loc["name"],

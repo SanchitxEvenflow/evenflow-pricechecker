@@ -23,17 +23,25 @@ logger = logging.getLogger(__name__)
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
-# Stealth init script — identical to amazon/flipkart
 STEALTH_SCRIPT = """
 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
 Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
 Object.defineProperty(navigator, 'languages', { get: () => ['en-IN', 'en-US', 'en'] });
 window.chrome = { runtime: {} };
+
+delete window.cdc_adoQpoasnfa76pfcZLmcfl_Array;
+delete window.cdc_adoQpoasnfa76pfcZLmcfl_Promise;
+delete window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
+
+const originalQuery = window.navigator.permissions.query;
+window.navigator.permissions.query = (parameters) =>
+    parameters.name === 'notifications'
+        ? Promise.resolve({ state: Notification.permission })
+        : originalQuery(parameters);
 """
 
 
 def _parse_proxy(proxy_url: str) -> dict:
-    """Parse proxy URL into Playwright's proxy format dict."""
     parsed = urlparse(proxy_url)
     result: dict = {"server": f"{parsed.scheme}://{parsed.hostname}:{parsed.port}"}
     if parsed.username:
@@ -44,7 +52,6 @@ def _parse_proxy(proxy_url: str) -> dict:
 
 
 async def _safe_close_context(context) -> None:
-    """Safely close a Playwright browser context — never leak."""
     if context:
         try:
             await context.close()
@@ -53,7 +60,7 @@ async def _safe_close_context(context) -> None:
 
 
 def _find_items(obj, tgt_id: str) -> list:
-    """Recursively walk a parsed JSON object to find nodes matching productId."""
+    """Recursively walk parsed JSON to find nodes where productId == tgt_id."""
     results = []
     if isinstance(obj, dict):
         if obj.get("productId") == tgt_id:
@@ -68,7 +75,6 @@ def _find_items(obj, tgt_id: str) -> list:
 
 async def fetch_instamart_data(
     item_id: str,
-    pincode: str,
     lat: float,
     lon: float,
     city: str,
@@ -80,10 +86,8 @@ async def fetch_instamart_data(
     Fetch product data from Instamart (Swiggy) using the shared Playwright browser.
 
     Tries up to min(3, pool_size) proxies on block/error, then falls back to a
-    direct connection — identical retry logic to amazon/flipkart scrapers.
-
-    Cookies (lat, lng, storeId) are injected per context so that Swiggy's CDN
-    serves the correct city-specific inventory and pricing.
+    direct connection. Cookies (lat, lng, storeId) are injected per context so
+    Swiggy serves the correct city-specific inventory and pricing.
 
     Returns a dict with keys:
         product_id, city, title, price, mrp, status, is_sold_out, url, checked_at
@@ -105,8 +109,8 @@ async def fetch_instamart_data(
             "error_message": msg,
         }
 
-    if store_id == "TODO" or not store_id:
-        logger.warning("[Instamart] %s: SKIPPED — store_id not configured in locations.py", city)
+    if not store_id or store_id == "TODO":
+        logger.warning("[Instamart] %s: SKIPPED — store_id not configured", city)
         return _error_result("missing_store_id")
 
     max_proxy_attempts = min(3, len(proxy_manager.active_pool) if proxy_manager else 0)
@@ -144,15 +148,13 @@ async def fetch_instamart_data(
             ])
 
             page = await context.new_page()
-
-            # domcontentloaded is much faster than networkidle for JSON-in-script extraction
             await page.goto(product_url, wait_until="domcontentloaded", timeout=60000)
 
             content = await page.content()
-
-            # Check for bot challenge page
             lower = content.lower()
-            if "captcha" in lower or "robot check" in lower or "access denied" in lower:
+
+            # ── Bot / error page detection ─────────────────────────────────
+            if any(x in lower for x in ["captcha", "robot check", "access denied"]):
                 logger.warning("[Instamart] %s: bot challenge on attempt %d", city, attempt + 1)
                 if proxy_manager:
                     proxy_manager.report_failure(proxy)
@@ -162,23 +164,26 @@ async def fetch_instamart_data(
                     continue
                 return _error_result("blocked")
 
-            # ── Extract embedded JSON state ────────────────────────────────
+            # ── Find the script tag that contains both the initial state
+            #    AND this item's data — the page may have multiple script tags
+            #    where the first has page-shell state (no product) and a later
+            #    one has the actual product data ────────────────────────────
             scripts = re.findall(r"<script.*?>(.*?)</script>", content, re.DOTALL)
-
-            # First find the initial state script (may or may not contain this item)
-            initial_state_script = None
+            target_script = None
             for s in scripts:
-                if "window.___INITIAL_STATE___" in s:
-                    initial_state_script = s
+                if item_id in s and "window.___INITIAL_STATE___" in s:
+                    target_script = s
                     break
 
-            if not initial_state_script:
-                # Wrong page served entirely (proxy redirect, bot page, etc.) — retry
+            if not target_script:
+                has_initial_state = any("window.___INITIAL_STATE___" in s for s in scripts)
+                id_in_page = item_id in content
                 title_match = re.search(r"<title>(.*?)</title>", content, re.IGNORECASE)
                 page_title = title_match.group(1) if title_match else "unknown"
                 logger.warning(
-                    "[Instamart] %s: no initial state in page — page_title=%r, content_len=%d",
-                    city, page_title, len(content),
+                    "[Instamart] %s: target script not found — "
+                    "has_initial_state=%s id_in_page=%s page_title=%r",
+                    city, has_initial_state, id_in_page, page_title,
                 )
                 if proxy_manager:
                     proxy_manager.report_failure(proxy)
@@ -188,28 +193,12 @@ async def fetch_instamart_data(
                     continue
                 return _error_result("state_script_not_found")
 
-            if item_id not in initial_state_script:
-                # Page loaded correctly but product not in this store's inventory
-                logger.info("[Instamart] %s: item %s not found in store state — unserviceable", city, item_id)
-                if proxy_manager:
-                    proxy_manager.report_success(proxy)
-                await _safe_close_context(context)
-                context = None
-                return {
-                    "product_id": item_id,
-                    "city": city,
-                    "title": f"Unserviceable at {city}",
-                    "price": None,
-                    "mrp": None,
-                    "status": "unserviceable",
-                    "is_sold_out": True,
-                    "url": product_url,
-                    "checked_at": now,
-                }
-
-            target_script = initial_state_script
-
-            match = re.search(r"window\.___INITIAL_STATE___\s*=\s*(.*?);\s*(?:window\.|var\s|let\s|const\s)", target_script, re.DOTALL)
+            # ── Extract and parse the embedded JSON ───────────────────────
+            match = re.search(
+                r"window\.___INITIAL_STATE___\s*=\s*(.*?);\s*(?:window\.|var\s|let\s|const\s)",
+                target_script,
+                re.DOTALL,
+            )
             if not match:
                 logger.warning("[Instamart] %s: failed to regex JSON from script", city)
                 if proxy_manager:
@@ -232,16 +221,27 @@ async def fetch_instamart_data(
                     continue
                 return _error_result("invalid_json")
 
-            # ── Extract product node from state tree ───────────────────────
+            # ── Find the product node in the state tree ───────────────────
             items = _find_items(data, item_id)
             if not items:
-                logger.warning("[Instamart] %s: item_not_found_in_state", city)
+                logger.warning("[Instamart] %s: item %s not found in parsed state", city, item_id)
                 if proxy_manager:
                     proxy_manager.report_success(proxy)
                 await _safe_close_context(context)
                 context = None
-                return _error_result("item_not_found_in_state")
+                return {
+                    "product_id": item_id,
+                    "city": city,
+                    "title": f"Unserviceable at {city}",
+                    "price": None,
+                    "mrp": None,
+                    "status": "unserviceable",
+                    "is_sold_out": True,
+                    "url": product_url,
+                    "checked_at": now,
+                }
 
+            # ── Extract price / title / stock ─────────────────────────────
             v = items[0]
             title = v.get("displayName", "Unknown Product")
 
@@ -252,8 +252,6 @@ async def fetch_instamart_data(
             price_obj = v.get("price", {})
             price = None
             mrp = None
-            is_sold_out = False
-            status = "error"
 
             if price_obj:
                 o_price = price_obj.get("offerPrice", {}).get("units")
@@ -263,18 +261,15 @@ async def fetch_instamart_data(
                 if m_price:
                     mrp = float(m_price)
 
-            inventory = v.get("inventory", {})
-            if not inventory.get("inStock", False):
-                is_sold_out = True
-                status = "out_of_stock"
-            else:
-                status = "available"
-
             if not mrp and price:
                 mrp = price
 
+            inventory = v.get("inventory", {})
+            is_sold_out = not inventory.get("inStock", False)
+            status = "out_of_stock" if is_sold_out else "available"
+
             if price is None and not is_sold_out:
-                logger.warning("[Instamart] %s: extraction failed (no price, not sold out)", city)
+                logger.warning("[Instamart] %s: no price extracted (not sold out)", city)
                 if proxy_manager:
                     proxy_manager.report_failure(proxy)
                 await _safe_close_context(context)
@@ -300,10 +295,7 @@ async def fetch_instamart_data(
             }
 
         except Exception as e:
-            logger.error(
-                "[Instamart] %s: unexpected error on attempt %d — %s",
-                city, attempt + 1, e,
-            )
+            logger.error("[Instamart] %s: unexpected error on attempt %d — %s", city, attempt + 1, e)
             if proxy_manager:
                 proxy_manager.report_failure(proxy)
             await _safe_close_context(context)
