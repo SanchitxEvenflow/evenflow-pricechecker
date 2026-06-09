@@ -32,7 +32,7 @@ BROWSER_HEADERS = {
     "Pragma": "no-cache",
     "Origin": "https://www.zepto.com",
     "Referer": "https://www.zepto.com/",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:151.0) Gecko/20100101 Firefox/151.0",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     "Sec-Fetch-Dest": "empty",
     "Sec-Fetch-Mode": "cors",
     "Sec-Fetch-Site": "same-site",
@@ -46,7 +46,7 @@ BROWSER_HEADERS = {
     "auth_revamp_flow": "v2",
     "source": "DIRECT",
     "location_type": "USER_SELECTED",
-    "marketplace_type": "SUPER_SAVER",
+    "marketplace_type": "B2C",
     "auth_from_cookie": "true",
     "compatible_components": (
         "SWAP_AND_SAVE_ON_CART,EXTERNAL_COUPONS,BUNDLE,MULTI_SELLER_ENABLED,"
@@ -65,7 +65,7 @@ BROWSER_HEADERS = {
         "GIFT_CARD,PROMO_CASH:0,PHARMACY_ENABLED,L4_ATTRIBUTES_ENABLED,"
         "RECOMMENDED_COUPON_WIDGET,ITEMISATION_ENABLED,TRUSTMARKER_V2,"
         "24X7_ENABLED_V1,SCLP_ADD_MONEY,JUSPAY_CARDS_BLOCK,"
-        "NO_PLATFORM_CHECK_ENABLED_V2,SUPER_SAVER:1,OFSE,GIFTING_ENABLED,"
+        "NO_PLATFORM_CHECK_ENABLED_V2,SUPER_SAVER:0,OFSE,GIFTING_ENABLED,"
         "HP_V4_FEED,SIZE_CHART_PDP,WIDGET_BASED_ETA,PC_REVAMP_1,NO_COST_EMI_V1,"
         "PRE_SEARCH,WIDGET_RESTRUCTURE,PRICING_CAMPAIGN_ID,BACHAT_FOR_ALL,"
         "TABBED_CAROUSEL_V3,CART_LMS:1,CART_LMS:2,SAMPLING_UPSELL_CAMPAIGN,"
@@ -185,7 +185,7 @@ def fetch_zepto_data(
             print(f"[Zepto] {city}: trying direct connection (attempt {attempt + 1})")
 
         proxies = {"http": proxy, "https": proxy} if proxy else None
-        session = requests.Session(impersonate="firefox133", proxies=proxies)
+        session = requests.Session(impersonate="chrome131", proxies=proxies)
 
         try:
             # Build per-request IDs (mimic browser behaviour)
