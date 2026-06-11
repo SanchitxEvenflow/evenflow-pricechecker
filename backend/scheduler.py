@@ -755,30 +755,20 @@ def setup_scheduler(app) -> AsyncIOScheduler | None:
     if os.getenv("CRON_ENABLED", "false").lower() != "true":
         return None
 
-    interval_minutes = int(os.getenv("CRON_INTERVAL_MINUTES", "60"))
-    scheduler = AsyncIOScheduler()
+    cron_hour = int(os.getenv("AMAZON_CRON_HOUR", "10"))
+    cron_minute = int(os.getenv("AMAZON_CRON_MINUTE", "0"))
+    scheduler = AsyncIOScheduler(timezone=IST)
 
-    job_kwargs: dict = {
-        "args": [app],
-        "id": "scheduled_scrape",
-        "max_instances": 1,
-        "coalesce": True,
-    }
-
-    if interval_minutes < 60:
-        # e.g. 30 → fires at :00 and :30 of every hour
-        trigger = "cron"
-        job_kwargs["minute"] = f"*/{interval_minutes}"
-    elif interval_minutes % 60 == 0:
-        # e.g. 60 → 4:00, 5:00, 6:00 | 120 → 4:00, 6:00, 8:00
-        trigger = "cron"
-        job_kwargs["hour"] = f"*/{interval_minutes // 60}"
-        job_kwargs["minute"] = 0
-    else:
-        # non-round interval — fall back to relative interval trigger
-        trigger = "interval"
-        job_kwargs["minutes"] = interval_minutes
-
-    scheduler.add_job(run_scheduled_scrape, trigger, **job_kwargs)
+    scheduler.add_job(
+        run_scheduled_scrape,
+        "cron",
+        hour=cron_hour,
+        minute=cron_minute,
+        args=[app],
+        id="amazon_daily_scrape",
+        max_instances=1,
+        coalesce=True,
+    )
     scheduler.start()
+    logger.info("Cron: Amazon daily scrape scheduled at %02d:%02d IST", cron_hour, cron_minute)
     return scheduler
