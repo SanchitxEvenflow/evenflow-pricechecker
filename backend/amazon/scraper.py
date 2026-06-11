@@ -244,7 +244,11 @@ def _detect_status(soup: BeautifulSoup, response_text: str, asin: str, page_url:
         canonical_href = canonical["href"]
         match = re.search(r"/dp/([A-Z0-9]{10})", canonical_href, re.IGNORECASE)
         if match and match.group(1).upper() != asin.upper():
-            return "suppressed"
+            # Variant ASINs canonicalize to parent/sibling — only suppress if
+            # the product title is also missing (page truly loaded the wrong product)
+            if not soup.select_one("#productTitle"):
+                return "suppressed"
+            logger.debug("Canonical ASIN mismatch for %s → %s but title present, continuing", asin, match.group(1))
 
     title_el = soup.select_one("#productTitle")
     if not title_el:
@@ -321,7 +325,18 @@ async def _save_debug(page, asin: str, attempt: int) -> None:
 
 
 
-def _fetch_curl_data_sync(asin: str) -> dict:
+async def _set_delivery_location(context, pincode: str) -> None:
+    await context.add_cookies([
+        {
+            "name": "i-see-az",
+            "value": f"pincode%3A{pincode}",
+            "domain": ".amazon.in",
+            "path": "/",
+        }
+    ])
+
+
+def _fetch_curl_data_sync(asin: str, cookies: dict = None) -> dict:
     """Single direct curl_cffi request to extract rating breakdown + BSR + category.
 
     Proxies return a bot-check page for curl traffic, so we go direct.
@@ -341,6 +356,7 @@ def _fetch_curl_data_sync(asin: str) -> dict:
                 "Accept-Language": "en-IN,en;q=0.9",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             },
+            cookies=cookies or {},
         )
         if resp.status_code != 200:
             logger.warning("Curl data fetch: HTTP %d for ASIN %s", resp.status_code, asin)
@@ -357,8 +373,8 @@ def _fetch_curl_data_sync(asin: str) -> dict:
         return {**_empty_breakdown, **_empty_rank, **_empty_category}
 
 
-async def _fetch_curl_data(asin: str) -> dict:
-    return await asyncio.to_thread(_fetch_curl_data_sync, asin)
+async def _fetch_curl_data(asin: str, cookies: dict = None) -> dict:
+    return await asyncio.to_thread(_fetch_curl_data_sync, asin, cookies)
 
 
 async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager) -> dict:
@@ -409,6 +425,7 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
             context = await browser.new_context(**context_opts)
             await context.add_init_script(STEALTH_SCRIPT)
             await context.route("**/*", _block_resources)
+            await _set_delivery_location(context, "560102")
             page = await context.new_page()
 
             logger.info("Navigating to %s via proxy=%s", url, proxy)
@@ -458,7 +475,9 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
 
             # curl gets no-JS static HTML which has the ratings histogram; try it for breakdown
             # and supplement any BSR/category fields still missing
-            curl_data = await _fetch_curl_data(asin)
+            playwright_cookies = await context.cookies()
+            cookie_dict = {c["name"]: c["value"] for c in playwright_cookies}
+            curl_data = await _fetch_curl_data(asin, cookies=cookie_dict)
 
             breakdown = {k: curl_data[k] for k in ("5_star", "4_star", "3_star", "2_star", "1_star")}
             if not any(breakdown.values()):
