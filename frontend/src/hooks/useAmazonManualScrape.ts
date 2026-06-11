@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { API } from "@/lib/api";
+import { API, authFetch } from "@/lib/api";
 import { csvEscape, downloadCsv } from "@/lib/csv";
 import { errorMessage } from "@/lib/errors";
 import { parseUniqueUppercaseTokens } from "@/lib/parsers";
@@ -31,7 +31,7 @@ export function useAmazonManualScrape() {
     setStats({ total: asins.length, processed: 0, remaining: asins.length, success: 0, failed: 0 });
 
     try {
-      const res = await fetch(`${API}/api/amazon/scrape-manual`, {
+      const res = await authFetch(`${API}/api/amazon/scrape-manual`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ asins }),
       });

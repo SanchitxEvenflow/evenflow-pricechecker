@@ -267,13 +267,20 @@ async def scrape_flipkart(fsn: str, browser: Browser, proxy_manager: ProxyManage
         context = None
         try:
             # ── Delay ───────────────────────────────────────────────────
-            delay = random.uniform(DELAY_MIN, DELAY_MAX)
-            logger.info(
-                "Flipkart scrape attempt %d/%d for FSN %s — waiting %.1fs (using %s)",
-                attempt + 1, max_proxy_attempts + 1, fsn, delay,
-                "cached URL" if cached_url and start_url == cached_url else "FSN bridge URL",
-            )
-            await asyncio.sleep(delay)
+            if attempt > 0:
+                delay = random.uniform(DELAY_MIN, DELAY_MAX)
+                logger.info(
+                    "Flipkart scrape attempt %d/%d for FSN %s — waiting %.1fs (using %s)",
+                    attempt + 1, max_proxy_attempts + 1, fsn, delay,
+                    "cached URL" if cached_url and start_url == cached_url else "FSN bridge URL",
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.info(
+                    "Flipkart scrape attempt %d/%d for FSN %s (using %s)",
+                    attempt + 1, max_proxy_attempts + 1, fsn,
+                    "cached URL" if cached_url and start_url == cached_url else "FSN bridge URL",
+                )
 
             # ── Browser context setup ───────────────────────────────────
             proxy = None
@@ -315,7 +322,7 @@ async def scrape_flipkart(fsn: str, browser: Browser, proxy_manager: ProxyManage
             # ── Wait for page to fully render ───────────────────────────
             # Wait for networkidle to ensure JS has rendered content
             try:
-                await page.wait_for_load_state("networkidle", timeout=15000)
+                await page.wait_for_load_state("networkidle", timeout=8000)
             except Exception:
                 pass
 

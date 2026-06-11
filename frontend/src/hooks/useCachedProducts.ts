@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { authFetch } from "@/lib/api";
 
 // Global cache outside the component to persist across re-mounts
 const productCache: Record<string, any[]> = {};
@@ -34,7 +35,7 @@ export function useCachedProducts(url: string) {
 
     // Start a new request
     setLoading(true);
-    const promise = fetch(url)
+    const promise = authFetch(url)
       .then(r => r.ok ? r.json() : [])
       .then(resData => {
         const result = Array.isArray(resData) ? resData : [];

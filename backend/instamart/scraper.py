@@ -148,7 +148,7 @@ async def fetch_instamart_data(
             ])
 
             page = await context.new_page()
-            await page.goto(product_url, wait_until="domcontentloaded", timeout=60000)
+            await page.goto(product_url, wait_until="domcontentloaded", timeout=30000)
 
             content = await page.content()
             lower = content.lower()

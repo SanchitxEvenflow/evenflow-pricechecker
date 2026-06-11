@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { API } from "@/lib/api";
+import { API, authFetch } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
 import type { CronStatus, LogEntry, SchedulerToast } from "@/types/price-scraper";
 
@@ -21,7 +21,7 @@ export function useSchedulerData() {
 
   const fetchLogs = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/sheets/amazon/api/logs`);
+      const res = await authFetch(`${API}/sheets/amazon/api/logs`);
       const data = await res.json();
       if (data.logs) setLogs(data.logs);
     } catch {}
@@ -29,7 +29,7 @@ export function useSchedulerData() {
 
   const fetchAllStatus = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/cron-status/all`);
+      const res = await authFetch(`${API}/cron-status/all`);
       if (res.ok) {
         const data = await res.json();
         setCronStatus(data.amazon);
@@ -56,7 +56,7 @@ export function useSchedulerData() {
     setTriggering(true);
     setToast(null);
     try {
-      const res = await fetch(`${API}${endpoint}`, { method: "POST" });
+      const res = await authFetch(`${API}${endpoint}`, { method: "POST" });
       if (res.ok) {
         setToast({ type: "success", msg: successMsg });
         setTimeout(fetchLogs, 2000);

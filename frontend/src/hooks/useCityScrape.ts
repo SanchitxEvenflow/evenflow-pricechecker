@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { API } from "@/lib/api";
+import { API, authFetch } from "@/lib/api";
 import { csvEscape } from "@/lib/csv";
 import { errorMessage } from "@/lib/errors";
 import { parseUniqueTokens } from "@/lib/parsers";
@@ -30,7 +30,7 @@ export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>)
     setResults({}); setStats({ total: ids.length * config.cities.length, done: 0, success: 0, failed: 0 });
 
     try {
-      const res = await fetch(`${API}${config.endpoint}`, {
+      const res = await authFetch(`${API}${config.endpoint}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ product_ids: ids }),
       });

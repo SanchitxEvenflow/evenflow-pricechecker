@@ -5,6 +5,7 @@ import logging
 import os
 import random
 from datetime import datetime, timezone, timedelta
+from functools import partial
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -117,42 +118,46 @@ async def _run_full_scrape(app, tab_prefix: str, run_type: str) -> None:
     tasks = [asyncio.create_task(scrape_one(r)) for r in remapped]
     pending_writes: list[dict] = []
 
-    for coro in asyncio.as_completed(tasks):
-        try:
-            result = await coro
-        except Exception:
-            logger.exception("Cron: scrape task raised unexpectedly")
-            total_failed += 1
+    try:
+        for coro in asyncio.as_completed(tasks):
+            try:
+                result = await coro
+            except Exception:
+                logger.exception("Cron: scrape task raised unexpectedly")
+                total_failed += 1
+                total_processed += 1
+                app.state.cron_status["progress"] = total_processed
+                run_logger.update_progress(run_id, total_success, total_failed)
+                continue
+
+            status = result.get("status", "error")
+            if status in ("error", "not_found", "blocked", "invalid_format"):
+                total_failed += 1
+            else:
+                total_success += 1
             total_processed += 1
+            pending_writes.append(_format_update(result))
             app.state.cron_status["progress"] = total_processed
             run_logger.update_progress(run_id, total_success, total_failed)
-            continue
 
-        status = result.get("status", "error")
-        if status in ("error", "not_found", "blocked", "invalid_format"):
-            total_failed += 1
-        else:
-            total_success += 1
-        total_processed += 1
-        pending_writes.append(_format_update(result))
-        app.state.cron_status["progress"] = total_processed
-        run_logger.update_progress(run_id, total_success, total_failed)
-
-        if len(pending_writes) >= CHUNK_SIZE:
+            if len(pending_writes) >= CHUNK_SIZE:
+                try:
+                    await sheets_client.async_batch_update_rows(sheet_id, new_tab, pending_writes)
+                    logger.info("Cron: wrote %d rows to '%s' (%d/%d done)",
+                                len(pending_writes), new_tab, total_processed, len(remapped))
+                except Exception:
+                    logger.exception("Cron: rolling write failed — continuing")
+                pending_writes = []
+    finally:
+        # Flush any buffered writes even if cancelled or exception escapes
+        if pending_writes:
             try:
                 await sheets_client.async_batch_update_rows(sheet_id, new_tab, pending_writes)
-                logger.info("Cron: wrote %d rows to '%s' (%d/%d done)",
-                            len(pending_writes), new_tab, total_processed, len(remapped))
+                logger.info("Cron: wrote final %d rows to '%s'", len(pending_writes), new_tab)
             except Exception:
-                logger.exception("Cron: rolling write failed — continuing")
-            pending_writes = []
-
-    if pending_writes:
-        try:
-            await sheets_client.async_batch_update_rows(sheet_id, new_tab, pending_writes)
-            logger.info("Cron: wrote final %d rows to '%s'", len(pending_writes), new_tab)
-        except Exception:
-            logger.exception("Cron: final write failed")
+                logger.exception("Cron: final write failed")
+        app.state.cron_status["is_running"] = False
+        run_logger.complete_log(run_id, total_success, total_failed, new_tab)
 
     elapsed = datetime.now(IST) - run_start
     minutes, seconds = divmod(int(elapsed.total_seconds()), 60)
@@ -160,13 +165,10 @@ async def _run_full_scrape(app, tab_prefix: str, run_type: str) -> None:
                 total_processed, len(remapped), new_tab, minutes, seconds)
 
     app.state.cron_status.update({
-        "is_running": False,
         "last_run_duration_seconds": int(elapsed.total_seconds()),
         "last_run_processed": total_processed,
         "progress": total_processed,
     })
-
-    run_logger.complete_log(run_id, total_success, total_failed, new_tab)
 
 
 async def run_scheduled_scrape(app) -> None:
@@ -236,79 +238,95 @@ async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str) -> None:
     })
 
     proxy_manager = app.state.proxy_manager
-    sem = asyncio.Semaphore(5)  # Blinkit rate-limits aggressively
+    sem = asyncio.Semaphore(int(os.getenv("BLINKIT_CONCURRENCY", "10")))
     loop = asyncio.get_running_loop()
 
-    async def scrape_one_city(pid: str, loc: dict) -> dict:
+    async def scrape_one_city(pid: str, loc: dict) -> tuple[str, dict]:
         async with sem:
-            result = await loop.run_in_executor(
-                app.state.thread_pool,
-                partial(
-                    fetch_blinkit_data,
-                    item_id=pid,
-                    pincode=loc["pincode"],
-                    lat=loc["lat"],
-                    lon=loc["lng"],
-                    city=loc["name"],
-                    proxy_manager=proxy_manager,
-                ),
-            )
-            return result
+            try:
+                result = await loop.run_in_executor(
+                    app.state.thread_pool,
+                    partial(
+                        fetch_blinkit_data,
+                        item_id=pid,
+                        pincode=loc["pincode"],
+                        lat=loc["lat"],
+                        lon=loc["lng"],
+                        city=loc["name"],
+                        proxy_manager=proxy_manager,
+                    ),
+                )
+            except Exception:
+                result = {"city": loc["name"], "status": "error"}
+        return (pid, result)
 
-    # Process one PID at a time — all 10 cities in parallel, then delay before next PID.
-    # Batch updates to sheets (max 100 per batch) to avoid N+1 API calls.
     total_done = 0
     total_success = 0
     total_failed = 0
     batch_updates = []
-    BATCH_SIZE = 100  # Google Sheets API batch limit
+    BATCH_SIZE = 100
 
-    for i, pid in enumerate(pids):
-        pid_tasks = [scrape_one_city(pid, loc) for loc in BLINKIT_LOCATIONS]
-        city_results = await asyncio.gather(*pid_tasks, return_exceptions=True)
+    # Track per-PID city collection — write row only when all cities complete
+    pid_city_results: dict[str, dict] = {pid: {} for pid in pids}
+    pid_pending: dict[str, int] = {pid: len(BLINKIT_LOCATIONS) for pid in pids}
+    pid_index: dict[str, int] = {pid: i for i, pid in enumerate(pids)}
 
-        results_by_city: dict = {}
-        for result in city_results:
-            if isinstance(result, Exception):
-                total_failed += 1
+    all_tasks = [
+        asyncio.create_task(scrape_one_city(pid, loc))
+        for pid in pids
+        for loc in BLINKIT_LOCATIONS
+    ]
+
+    try:
+        for coro in asyncio.as_completed(all_tasks):
+            try:
+                pid, result = await coro
+            except Exception:
+                logger.exception("Blinkit: unexpected task error")
                 continue
+
             city = result.get("city", "")
             if city:
-                results_by_city[city] = result
+                pid_city_results[pid][city] = result
+            else:
+                logger.warning("Blinkit: task returned result with no city field for pid=%s", pid)
             status = result.get("status", "error")
             if status == "error":
                 total_failed += 1
             else:
                 total_success += 1
 
-        total_done += 1
-        app.state.blinkit_cron_status["progress"] = total_done
-        run_logger.update_progress(run_id, total_success, total_failed)
+            pid_pending[pid] -= 1
+            if pid_pending[pid] == 0:
+                i = pid_index[pid]
+                total_done += 1
+                app.state.blinkit_cron_status["progress"] = total_done
+                run_logger.update_progress(run_id, total_success, total_failed)
 
-        # Collect update for batching
-        batch_updates.append({
-            "row": i + 2,
-            "values": format_blinkit_row(results_by_city),
-        })
+                batch_updates.append({
+                    "row": i + 2,
+                    "values": format_blinkit_row(pid_city_results[pid]),
+                })
 
-        # Flush batch if full or at end
-        should_flush = (len(batch_updates) == BATCH_SIZE) or (i == len(pids) - 1)
-        if should_flush:
+                should_flush = (len(batch_updates) == BATCH_SIZE) or (total_done == len(pids))
+                if should_flush:
+                    try:
+                        await sheets_client.async_batch_update_blinkit_rows(sheet_id, new_tab, batch_updates)
+                        logger.info("Blinkit: wrote batch of %d rows (%d/%d total)",
+                                   len(batch_updates), total_done, len(pids))
+                        batch_updates = []
+                    except Exception:
+                        logger.exception("Blinkit: failed to write batch")
+                        batch_updates = []
+    finally:
+        if batch_updates:
             try:
                 await sheets_client.async_batch_update_blinkit_rows(sheet_id, new_tab, batch_updates)
-                logger.info("Blinkit: wrote batch of %d rows (%d/%d total)", 
-                           len(batch_updates), total_done, len(pids))
-                batch_updates = []
+                logger.info("Blinkit: flushed final %d rows on shutdown", len(batch_updates))
             except Exception:
-                logger.exception("Blinkit: failed to write batch at offset %d", i - len(batch_updates))
-                batch_updates = []
-
-        if i < len(pids) - 1:
-            delay = random.uniform(
-                float(os.getenv("BLINKIT_DELAY_MIN", "1.0")),
-                float(os.getenv("BLINKIT_DELAY_MAX", "3.0")),
-            )
-            await asyncio.sleep(delay)
+                logger.exception("Blinkit: final flush failed on shutdown")
+        app.state.blinkit_cron_status["is_running"] = False
+        run_logger.complete_log(run_id, total_success, total_failed, new_tab)
 
     logger.info("Blinkit: all %d PIDs processed — tab '%s'", len(pids), new_tab)
 
@@ -318,13 +336,10 @@ async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str) -> None:
                 len(pids), len(BLINKIT_LOCATIONS), new_tab, minutes, seconds)
 
     app.state.blinkit_cron_status.update({
-        "is_running": False,
         "last_run_duration_seconds": int(elapsed.total_seconds()),
         "last_run_processed": len(pids),
         "progress": len(pids),
     })
-
-    run_logger.complete_log(run_id, total_success, total_failed, new_tab)
 
 
 async def run_manual_blinkit_trigger(app) -> None:
@@ -385,84 +400,96 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str) -> None:
     })
 
     proxy_manager = app.state.proxy_manager
-    sem = asyncio.Semaphore(5)
+    sem = asyncio.Semaphore(int(os.getenv("ZEPTO_CONCURRENCY", "10")))
     loop = asyncio.get_running_loop()
 
-    async def scrape_one_city(pid: str, loc: dict) -> dict:
+    async def scrape_one_city(pid: str, loc: dict) -> tuple[str, dict]:
         async with sem:
-            result = await loop.run_in_executor(
-                app.state.thread_pool,
-                partial(
-                    fetch_zepto_data,
-                    item_id=pid,
-                    pincode=loc["pincode"],
-                    lat=loc["lat"],
-                    lon=loc["lng"],
-                    city=loc["name"],
-                    store_id=loc["store_id"],
-                    proxy_manager=proxy_manager,
-                ),
-            )
-            return result
+            try:
+                result = await loop.run_in_executor(
+                    app.state.thread_pool,
+                    partial(
+                        fetch_zepto_data,
+                        item_id=pid,
+                        pincode=loc["pincode"],
+                        lat=loc["lat"],
+                        lon=loc["lng"],
+                        city=loc["name"],
+                        store_id=loc["store_id"],
+                        proxy_manager=proxy_manager,
+                    ),
+                )
+            except Exception:
+                result = {"city": loc["name"], "status": "error"}
+        return (pid, result)
 
-    total_done = 0
-    total_success = 0
-    total_failed = 0
-
-    # Process one PID at a time — all 9 cities in parallel, then delay before next PID.
-    # Batch updates to sheets (max 100 per batch) to avoid N+1 API calls.
     total_done = 0
     total_success = 0
     total_failed = 0
     batch_updates = []
-    BATCH_SIZE = 100  # Google Sheets API batch limit
+    BATCH_SIZE = 100
 
-    for i, pid in enumerate(pids):
-        pid_tasks = [scrape_one_city(pid, loc) for loc in ZEPTO_LOCATIONS]
-        city_results = await asyncio.gather(*pid_tasks, return_exceptions=True)
+    # Track per-PID city collection — write row only when all cities complete
+    pid_city_results: dict[str, dict] = {pid: {} for pid in pids}
+    pid_pending: dict[str, int] = {pid: len(ZEPTO_LOCATIONS) for pid in pids}
+    pid_index: dict[str, int] = {pid: i for i, pid in enumerate(pids)}
 
-        results_by_city: dict = {}
-        for result in city_results:
-            if isinstance(result, Exception):
-                total_failed += 1
+    all_tasks = [
+        asyncio.create_task(scrape_one_city(pid, loc))
+        for pid in pids
+        for loc in ZEPTO_LOCATIONS
+    ]
+
+    try:
+        for coro in asyncio.as_completed(all_tasks):
+            try:
+                pid, result = await coro
+            except Exception:
+                logger.exception("Zepto: unexpected task error")
                 continue
+
             city = result.get("city", "")
             if city:
-                results_by_city[city] = result
+                pid_city_results[pid][city] = result
+            else:
+                logger.warning("Zepto: task returned result with no city field for pid=%s", pid)
             status = result.get("status", "error")
             if status == "error":
                 total_failed += 1
             else:
                 total_success += 1
 
-        total_done += 1
-        app.state.zepto_cron_status["progress"] = total_done
-        run_logger.update_progress(run_id, total_success, total_failed)
+            pid_pending[pid] -= 1
+            if pid_pending[pid] == 0:
+                i = pid_index[pid]
+                total_done += 1
+                app.state.zepto_cron_status["progress"] = total_done
+                run_logger.update_progress(run_id, total_success, total_failed)
 
-        # Collect update for batching
-        batch_updates.append({
-            "row": i + 2,
-            "values": format_zepto_row(results_by_city),
-        })
+                batch_updates.append({
+                    "row": i + 2,
+                    "values": format_zepto_row(pid_city_results[pid]),
+                })
 
-        # Flush batch if full or at end
-        should_flush = (len(batch_updates) == BATCH_SIZE) or (i == len(pids) - 1)
-        if should_flush:
+                should_flush = (len(batch_updates) == BATCH_SIZE) or (total_done == len(pids))
+                if should_flush:
+                    try:
+                        await sheets_client.async_batch_update_zepto_rows(sheet_id, new_tab, batch_updates)
+                        logger.info("Zepto: wrote batch of %d rows (%d/%d total)",
+                                   len(batch_updates), total_done, len(pids))
+                        batch_updates = []
+                    except Exception:
+                        logger.exception("Zepto: failed to write batch")
+                        batch_updates = []
+    finally:
+        if batch_updates:
             try:
                 await sheets_client.async_batch_update_zepto_rows(sheet_id, new_tab, batch_updates)
-                logger.info("Zepto: wrote batch of %d rows (%d/%d total)", 
-                           len(batch_updates), total_done, len(pids))
-                batch_updates = []
+                logger.info("Zepto: flushed final %d rows on shutdown", len(batch_updates))
             except Exception:
-                logger.exception("Zepto: failed to write batch at offset %d", i - len(batch_updates))
-                batch_updates = []
-
-        if i < len(pids) - 1:
-            delay = random.uniform(
-                float(os.getenv("ZEPTO_DELAY_MIN", "1.0")),
-                float(os.getenv("ZEPTO_DELAY_MAX", "3.0")),
-            )
-            await asyncio.sleep(delay)
+                logger.exception("Zepto: final flush failed on shutdown")
+        app.state.zepto_cron_status["is_running"] = False
+        run_logger.complete_log(run_id, total_success, total_failed, new_tab)
 
     elapsed = datetime.now(IST) - run_start
     minutes, seconds = divmod(int(elapsed.total_seconds()), 60)
@@ -470,18 +497,10 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str) -> None:
                 len(pids), len(ZEPTO_LOCATIONS), new_tab, minutes, seconds)
 
     app.state.zepto_cron_status.update({
-        "is_running": False,
         "last_run_duration_seconds": int(elapsed.total_seconds()),
         "last_run_processed": len(pids),
         "progress": len(pids),
     })
-
-    run_logger.complete_log(run_id, total_success, total_failed, new_tab)
-
-
-async def run_manual_flipkart_trigger(app) -> None:
-    """Called when user manually triggers the Flipkart full scrape from the UI."""
-    await _run_full_flipkart_scrape(app, tab_prefix="Flipkart_Manual", run_type="flipkart_manual")
 
 
 async def run_manual_zepto_trigger(app) -> None:
@@ -563,74 +582,85 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str) -> Non
     batch_updates = []
     BATCH_SIZE = 100  # Google Sheets API batch limit
 
-    async def scrape_one_city(pid_: str, loc: dict) -> dict:
+    async def scrape_one_city(pid_: str, loc: dict) -> tuple[str, dict]:
         async with batch_context(app.state):
-            return await fetch_instamart_data(
-                item_id=pid_,
-                pincode=loc.get("pincode", ""),
-                lat=loc["lat"],
-                lon=loc["lng"],
-                city=loc["name"],
-                store_id=loc.get("store_id", ""),
-                browser=get_browser(app.state),
-                proxy_manager=proxy_manager,
-            )
+            try:
+                result = await fetch_instamart_data(
+                    item_id=pid_,
+                    lat=loc["lat"],
+                    lon=loc["lng"],
+                    city=loc["name"],
+                    store_id=loc.get("store_id", ""),
+                    browser=get_browser(app.state),
+                    proxy_manager=proxy_manager,
+                )
+            except Exception:
+                result = {"city": loc["name"], "status": "error"}
+        return (pid_, result)
 
-    for i, pid in enumerate(pids):
-        # Scrape all cities for this PID concurrently.
-        city_results = await asyncio.gather(
-            *[scrape_one_city(pid, loc) for loc in INSTAMART_LOCATIONS],
-            return_exceptions=True,
-        )
+    # Track per-PID city collection — write row only when all cities complete
+    pid_city_results: dict[str, dict] = {pid: {} for pid in pids}
+    pid_pending: dict[str, int] = {pid: len(INSTAMART_LOCATIONS) for pid in pids}
+    pid_index: dict[str, int] = {pid: i for i, pid in enumerate(pids)}
 
-        results_by_city: dict = {}
-        for result in city_results:
-            if isinstance(result, Exception):
-                total_failed += 1
+    all_tasks = [
+        asyncio.create_task(scrape_one_city(pid, loc))
+        for pid in pids
+        for loc in INSTAMART_LOCATIONS
+    ]
+
+    try:
+        for coro in asyncio.as_completed(all_tasks):
+            try:
+                pid, result = await coro
+            except Exception:
+                logger.exception("Instamart: unexpected task error")
                 continue
+
             city = result.get("city", "")
             if city:
-                results_by_city[city] = result
+                pid_city_results[pid][city] = result
+            else:
+                logger.warning("Instamart: task returned result with no city field for pid=%s", pid)
             status = result.get("status", "error")
             if status == "error":
                 total_failed += 1
             else:
                 total_success += 1
 
-        total_done += 1
-        app.state.instamart_cron_status["progress"] = total_done
-        run_logger.update_progress(run_id, total_success, total_failed)
+            pid_pending[pid] -= 1
+            if pid_pending[pid] == 0:
+                i = pid_index[pid]
+                total_done += 1
+                app.state.instamart_cron_status["progress"] = total_done
+                run_logger.update_progress(run_id, total_success, total_failed)
 
-        batch_updates.append({
-            "row": i + 2,
-            "values": format_instamart_row(results_by_city),
-        })
+                batch_updates.append({
+                    "row": i + 2,
+                    "values": format_instamart_row(pid_city_results[pid]),
+                })
 
-        # Flush batch to Sheets
-        should_flush = (len(batch_updates) == BATCH_SIZE) or (i == len(pids) - 1)
-        if should_flush:
+                should_flush = (len(batch_updates) == BATCH_SIZE) or (total_done == len(pids))
+                if should_flush:
+                    try:
+                        await sheets_client.async_batch_update_instamart_rows(sheet_id, new_tab, batch_updates)
+                        logger.info(
+                            "Instamart: wrote batch of %d rows (%d/%d total)",
+                            len(batch_updates), total_done, len(pids),
+                        )
+                        batch_updates = []
+                    except Exception:
+                        logger.exception("Instamart: failed to write batch")
+                        batch_updates = []
+    finally:
+        if batch_updates:
             try:
                 await sheets_client.async_batch_update_instamart_rows(sheet_id, new_tab, batch_updates)
-                logger.info(
-                    "Instamart: wrote batch of %d rows (%d/%d total)",
-                    len(batch_updates),
-                    total_done,
-                    len(pids),
-                )
-                batch_updates = []
+                logger.info("Instamart: flushed final %d rows on shutdown", len(batch_updates))
             except Exception:
-                logger.exception(
-                    "Instamart: failed to write batch at offset %d",
-                    i - len(batch_updates),
-                )
-                batch_updates = []
-
-        if i < len(pids) - 1:
-            delay = random.uniform(
-                float(os.getenv("INSTAMART_DELAY_MIN", "1.0")),
-                float(os.getenv("INSTAMART_DELAY_MAX", "3.0")),
-            )
-            await asyncio.sleep(delay)
+                logger.exception("Instamart: final flush failed on shutdown")
+        app.state.instamart_cron_status["is_running"] = False
+        run_logger.complete_log(run_id, total_success, total_failed, new_tab)
 
     elapsed = datetime.now(IST) - run_start
     minutes, seconds = divmod(int(elapsed.total_seconds()), 60)
@@ -644,13 +674,10 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str) -> Non
     )
 
     app.state.instamart_cron_status.update({
-        "is_running": False,
         "last_run_duration_seconds": int(elapsed.total_seconds()),
         "last_run_processed": len(pids),
         "progress": len(pids),
     })
-
-    run_logger.complete_log(run_id, total_success, total_failed, new_tab)
 
 
 async def run_manual_instamart_trigger(app) -> None:
@@ -731,27 +758,48 @@ async def _run_full_flipkart_scrape(app, tab_prefix: str, run_type: str) -> None
     total_success = 0
     total_failed = 0
 
-    for chunk_start in range(0, len(remapped), CHUNK_SIZE):
-        chunk = remapped[chunk_start : chunk_start + CHUNK_SIZE]
-        try:
-            chunk_results = await asyncio.gather(*[scrape_one(r) for r in chunk])
-            updates = [_format_flipkart_update(res) for res in chunk_results]
-            await sheets_client.async_batch_update_flipkart_rows(sheet_id, new_tab, updates)
-            total_processed += len(chunk_results)
+    tasks = [asyncio.create_task(scrape_one(r)) for r in remapped]
+    pending_writes: list[dict] = []
 
-            for res in chunk_results:
-                status = res.get("status", "error")
-                if status in ("error", "not_found", "blocked", "invalid_format", "unavailable"):
-                    total_failed += 1
-                else:
-                    total_success += 1
+    try:
+        for coro in asyncio.as_completed(tasks):
+            try:
+                result = await coro
+            except Exception:
+                logger.exception("Flipkart cron: scrape task raised unexpectedly")
+                total_failed += 1
+                total_processed += 1
+                app.state.flipkart_cron_status["progress"] = total_processed
+                run_logger.update_progress(run_id, total_success, total_failed)
+                continue
 
+            status = result.get("status", "error")
+            if status in ("error", "not_found", "blocked", "invalid_format", "unavailable"):
+                total_failed += 1
+            else:
+                total_success += 1
+            total_processed += 1
+            pending_writes.append(_format_flipkart_update(result))
             app.state.flipkart_cron_status["progress"] = total_processed
             run_logger.update_progress(run_id, total_success, total_failed)
-            logger.info("Flipkart: wrote chunk %d–%d to tab '%s' (%d/%d done)",
-                        chunk[0]["row"], chunk[-1]["row"], new_tab, total_processed, len(remapped))
-        except Exception:
-            logger.exception("Flipkart: chunk write failed at offset %d — continuing", chunk_start)
+
+            if len(pending_writes) >= CHUNK_SIZE:
+                try:
+                    await sheets_client.async_batch_update_flipkart_rows(sheet_id, new_tab, pending_writes)
+                    logger.info("Flipkart cron: wrote %d rows to '%s' (%d/%d done)",
+                                len(pending_writes), new_tab, total_processed, len(remapped))
+                except Exception:
+                    logger.exception("Flipkart cron: rolling write failed — continuing")
+                pending_writes = []
+    finally:
+        if pending_writes:
+            try:
+                await sheets_client.async_batch_update_flipkart_rows(sheet_id, new_tab, pending_writes)
+                logger.info("Flipkart cron: wrote final %d rows to '%s'", len(pending_writes), new_tab)
+            except Exception:
+                logger.exception("Flipkart cron: final write failed")
+        app.state.flipkart_cron_status["is_running"] = False
+        run_logger.complete_log(run_id, total_success, total_failed, new_tab)
 
     elapsed = datetime.now(IST) - run_start
     minutes, seconds = divmod(int(elapsed.total_seconds()), 60)
@@ -759,13 +807,10 @@ async def _run_full_flipkart_scrape(app, tab_prefix: str, run_type: str) -> None
                 total_processed, len(remapped), new_tab, minutes, seconds)
 
     app.state.flipkart_cron_status.update({
-        "is_running": False,
         "last_run_duration_seconds": int(elapsed.total_seconds()),
         "last_run_processed": total_processed,
         "progress": total_processed,
     })
-
-    run_logger.complete_log(run_id, total_success, total_failed, new_tab)
 
 
 async def run_manual_flipkart_trigger(app) -> None:

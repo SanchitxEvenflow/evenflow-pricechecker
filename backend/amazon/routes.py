@@ -218,19 +218,37 @@ async def scrape_batch(
         return {"status": "success", "message": "No rows to process", "data": []}
 
     all_results: list[dict] = []
+    pending_writes: list[dict] = []
 
-    for chunk_start in range(0, len(body.rows), CHUNK_SIZE):
-        chunk = body.rows[chunk_start : chunk_start + CHUNK_SIZE]
-        chunk_results = await asyncio.gather(
-            *[_scrape_with_sem(r["asin"], r["row"], request.app.state, proxy_manager) for r in chunk]
-        )
-        updates = [_format_update(res) for res in chunk_results]
+    tasks = [
+        asyncio.create_task(_scrape_with_sem(r["asin"], r["row"], request.app.state, proxy_manager))
+        for r in body.rows
+    ]
+
+    for coro in asyncio.as_completed(tasks):
         try:
-            sheets_client.batch_update_rows(body.sheet_id, body.tab_name, updates)
-            logger.info("Wrote chunk rows %d–%d to sheets", chunk[0]["row"], chunk[-1]["row"])
+            result = await coro
         except Exception:
-            logger.exception("Sheets write failed for chunk starting row %d", chunk[0]["row"])
-        all_results.extend(chunk_results)
+            logger.exception("scrape_batch: task raised unexpectedly")
+            continue
+        all_results.append(result)
+        pending_writes.append(_format_update(result))
+
+        if len(pending_writes) >= CHUNK_SIZE:
+            try:
+                sheets_client.batch_update_rows(body.sheet_id, body.tab_name, pending_writes)
+                logger.info("scrape_batch: wrote %d rows (%d/%d done)",
+                            len(pending_writes), len(all_results), len(body.rows))
+            except Exception:
+                logger.exception("scrape_batch: sheets write failed")
+            pending_writes = []
+
+    if pending_writes:
+        try:
+            sheets_client.batch_update_rows(body.sheet_id, body.tab_name, pending_writes)
+            logger.info("scrape_batch: wrote final %d rows", len(pending_writes))
+        except Exception:
+            logger.exception("scrape_batch: final sheets write failed")
 
     return {"status": "success", "processed": len(all_results), "data": all_results}
 

@@ -1,7 +1,5 @@
 """
 FastAPI Price Checker — Amazon.in & Flipkart.in scraper service.
-
-No database, no auth — pure request → scrape → return JSON.
 """
 
 import asyncio
@@ -18,10 +16,19 @@ from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+
+from auth import (
+    LoginRequest,
+    auth_enabled,
+    create_token,
+    is_public_route,
+    verify_credentials,
+    verify_token,
+)
 
 from proxy.manager import ProxyManager
 from amazon.routes import price_router as amazon_price_router
@@ -42,7 +49,7 @@ from schemas.price import (
     HealthResponse,
 )
 
-from amazon.scraper import scrape_amazon
+from amazon.scraper import scrape_amazon, fetch_curl_supplement, merge_curl_supplement
 from flipkart.scraper import scrape_flipkart
 from utils.google_sheets import GoogleSheetsClient
 from utils.scrape_helpers import SCRAPE_CONCURRENCY, MANUAL_RESERVED, BROWSER_POOL_SIZE, get_browser, sem_with_timeout
@@ -92,8 +99,12 @@ async def lifespan(app: FastAPI):
     logger.info("Proxy pool: %d active, %d dead", proxy_status["active"], proxy_status["dead"])
 
     # Initialize Google Sheets client and Thread Pool
+    # Size to cover simultaneous Blinkit + Zepto executor concurrency plus headroom.
+    _blinkit_workers = int(os.getenv("BLINKIT_CONCURRENCY", "10"))
+    _zepto_workers = int(os.getenv("ZEPTO_CONCURRENCY", "10"))
+    _thread_pool_size = SCRAPE_CONCURRENCY * 3 + _blinkit_workers + _zepto_workers
     app.state.sheets_client = GoogleSheetsClient()
-    app.state.thread_pool = ThreadPoolExecutor(max_workers=SCRAPE_CONCURRENCY * 3)
+    app.state.thread_pool = ThreadPoolExecutor(max_workers=_thread_pool_size)
 
     # Launch Playwright browser pool
     headless = os.getenv("PLAYWRIGHT_HEADLESS", "true").lower() == "true"
@@ -253,6 +264,31 @@ async def log_requests(request: Request, call_next):
     return response
 
 
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    """Require a valid JWT on all routes except the public allowlist."""
+    if not auth_enabled():
+        return await call_next(request)
+
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
+    path = request.url.path.rstrip("/") or "/"
+    if is_public_route(request.method, path):
+        return await call_next(request)
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+
+    try:
+        verify_token(auth_header[7:])
+    except HTTPException as exc:
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+    return await call_next(request)
+
+
 # ── Global exception handler ───────────────────────────────────────────────
 
 @app.exception_handler(Exception)
@@ -276,6 +312,19 @@ app.include_router(flipkart_sheets_router)
 app.include_router(blinkit_router, prefix="/price", tags=["blinkit"])
 app.include_router(zepto_router, prefix="/price", tags=["zepto"])
 app.include_router(instamart_router, prefix="/price", tags=["instamart"])
+
+
+# ── Auth ─────────────────────────────────────────────────────────────────────
+
+@app.post("/auth/login")
+async def login(body: LoginRequest):
+    """Exchange username/password for a JWT (24h expiry)."""
+    if not auth_enabled():
+        raise HTTPException(status_code=503, detail="Authentication is not configured")
+    if not verify_credentials(body.username, body.password):
+        await asyncio.sleep(0.5)  # slow down brute-force attempts
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    return {"access_token": create_token(body.username), "token_type": "bearer"}
 
 
 # ── Config endpoint (exposes sheet links to the static frontend) ─────────────
@@ -331,12 +380,17 @@ async def check_both_prices(body: BothRequest, request: Request):
     """Scrape both Amazon.in and Flipkart.in in parallel."""
     proxy_manager = request.app.state.proxy_manager
 
-    # Run both scrapers in parallel, each picks a browser from the pool
+    # Run each scraper sequentially under its own semaphore slot to avoid holding
+    # two browser slots simultaneously, which would halve effective concurrency.
     async with sem_with_timeout(request.app.state.total_sem):
-        amazon_result, flipkart_result = await asyncio.gather(
-            scrape_amazon(body.asin, get_browser(request.app.state), proxy_manager),
-            scrape_flipkart(body.fsn, get_browser(request.app.state), proxy_manager),
-        )
+        amazon_result = await scrape_amazon(body.asin, get_browser(request.app.state), proxy_manager, skip_curl=True)
+    amazon_cookies = amazon_result.pop("_cookies", {}) or {}
+    if amazon_cookies:
+        curl_data = await fetch_curl_supplement(body.asin, amazon_cookies)
+        merge_curl_supplement(amazon_result, curl_data)
+
+    async with sem_with_timeout(request.app.state.total_sem):
+        flipkart_result = await scrape_flipkart(body.fsn, get_browser(request.app.state), proxy_manager)
 
     # Calculate price difference
     price_diff, cheaper_on = _calculate_price_diff(
@@ -350,9 +404,12 @@ async def check_both_prices(body: BothRequest, request: Request):
         mrp=amazon_result.get("mrp"),
         rating=amazon_result.get("rating"),
         rating_count=amazon_result.get("rating_count"),
+        rating_breakdown=amazon_result.get("rating_breakdown"),
         rank_raw=amazon_result.get("rank_raw"),
         rank_value=amazon_result.get("rank_value"),
         rank_category=amazon_result.get("rank_category"),
+        sub_rank_value=amazon_result.get("sub_rank_value"),
+        sub_rank_category=amazon_result.get("sub_rank_category"),
         parent_node=amazon_result.get("parent_node"),
         child_node=amazon_result.get("child_node"),
         category_path=amazon_result.get("category_path"),
