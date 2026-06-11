@@ -296,7 +296,7 @@ async def _handle_interstitial(page) -> bool:
             except Exception:
                 continue
 
-        await page.wait_for_load_state("networkidle", timeout=15000)
+        await page.wait_for_load_state("networkidle", timeout=8000)
         # Wait for product title + ratings section
         try:
             await page.wait_for_selector("#productTitle", timeout=10000)
@@ -380,7 +380,25 @@ async def _fetch_curl_data(asin: str, cookies: dict = None) -> dict:
     return await asyncio.to_thread(_fetch_curl_data_sync, asin, cookies)
 
 
-async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager) -> dict:
+async def fetch_curl_supplement(asin: str, cookies: dict) -> dict:
+    """Run the curl supplemental fetch outside batch_context for better slot utilisation."""
+    return await _fetch_curl_data(asin, cookies=cookies)
+
+
+def merge_curl_supplement(result: dict, curl_data: dict) -> None:
+    """Merge curl supplement data into an existing scrape result in-place."""
+    if not curl_data:
+        return
+    breakdown = {k: curl_data.get(k) for k in ("5_star", "4_star", "3_star", "2_star", "1_star")}
+    if any(breakdown.values()):
+        result["rating_breakdown"] = breakdown
+    for field in ("rank_value", "rank_raw", "rank_category", "sub_rank_value", "sub_rank_category",
+                  "parent_node", "child_node", "category_path"):
+        if not result.get(field) and curl_data.get(field):
+            result[field] = curl_data[field]
+
+
+async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager, skip_curl: bool = False) -> dict:
     """
     Scrape Amazon.in product page for price data using a real Playwright browser context.
 
@@ -404,10 +422,14 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
     for attempt in range(max_proxy_attempts + 1):  # +1 = direct-connection fallback
         proxy = None
         try:
-            delay = random.uniform(DELAY_MIN, DELAY_MAX)
-            logger.info("Amazon scrape attempt %d/%d for ASIN %s — waiting %.1fs",
-                        attempt + 1, max_proxy_attempts + 1, asin, delay)
-            await asyncio.sleep(delay)
+            if attempt > 0:
+                delay = random.uniform(DELAY_MIN, DELAY_MAX)
+                logger.info("Amazon scrape attempt %d/%d for ASIN %s — waiting %.1fs",
+                            attempt + 1, max_proxy_attempts + 1, asin, delay)
+                await asyncio.sleep(delay)
+            else:
+                logger.info("Amazon scrape attempt %d/%d for ASIN %s",
+                            attempt + 1, max_proxy_attempts + 1, asin)
 
             if attempt == max_proxy_attempts:
                 proxy = None
@@ -477,12 +499,17 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
             category_data = _extract_category_hierarchy(soup)
 
             # curl gets no-JS static HTML which has the ratings histogram; try it for breakdown
-            # and supplement any BSR/category fields still missing
+            # and supplement any BSR/category fields still missing.
+            # When skip_curl=True the caller runs curl outside batch_context for better throughput.
             playwright_cookies = await context.cookies()
             cookie_dict = {c["name"]: c["value"] for c in playwright_cookies}
-            curl_data = await _fetch_curl_data(asin, cookies=cookie_dict)
 
-            breakdown = {k: curl_data[k] for k in ("5_star", "4_star", "3_star", "2_star", "1_star")}
+            if not skip_curl:
+                curl_data = await _fetch_curl_data(asin, cookies=cookie_dict)
+            else:
+                curl_data = {}
+
+            breakdown = {k: curl_data.get(k) for k in ("5_star", "4_star", "3_star", "2_star", "1_star")}
             if not any(breakdown.values()):
                 breakdown = _extract_rating_breakdown(soup)
 
@@ -503,7 +530,7 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
             logger.info("Amazon scraped ASIN %s: price=%s, rating=%s, rank=%s, parent=%s, status=%s",
                         asin, price, rating, rank_value, parent_node, final_status)
 
-            return {
+            result = {
                 "asin": asin,
                 "price": price or "",
                 "mrp": mrp,
@@ -523,6 +550,9 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
                 "url": url,
                 "checked_at": datetime.now(IST).isoformat(),
             }
+            if skip_curl:
+                result["_cookies"] = cookie_dict
+            return result
 
         except Exception as e:
             logger.exception("Amazon scrape error for ASIN %s (attempt %d): %s", asin, attempt + 1, str(e))

@@ -1,5 +1,16 @@
 [
   {
+    "run_id": "307144e4",
+    "type": "manual",
+    "triggered_at": "2026-06-11T16:36:43.550137+05:30",
+    "completed_at": "2026-06-11T16:51:56.305163+05:30",
+    "total_asins": 726,
+    "success_count": 715,
+    "failed_count": 11,
+    "sheet_tab": "Manual_Trigger_2026-06-11_16-36",
+    "status": "completed"
+  },
+  {
     "run_id": "ff0f002b",
     "type": "blinkit_manual",
     "triggered_at": "2026-06-08T16:51:30.213473+05:30",

@@ -22,7 +22,7 @@ from utils.scrape_helpers import (
     get_browser,
 )
 
-from amazon.scraper import scrape_amazon
+from amazon.scraper import scrape_amazon, fetch_curl_supplement, merge_curl_supplement
 from flipkart.scraper import scrape_flipkart
 from blinkit.scraper import fetch_blinkit_data
 from blinkit.locations import LOCATIONS as BLINKIT_LOCATIONS
@@ -101,36 +101,58 @@ async def _run_full_scrape(app, tab_prefix: str, run_type: str) -> None:
 
     async def scrape_one(row_data: dict) -> dict:
         async with batch_context(app.state):
-            result = await scrape_amazon(row_data["asin"], get_browser(app.state), proxy_manager)
+            result = await scrape_amazon(row_data["asin"], get_browser(app.state), proxy_manager, skip_curl=True)
             result["row"] = row_data["row"]
-            return result
+        # semaphore released — curl runs here, overlapping with the next ASIN's Playwright scrape
+        cookies = result.pop("_cookies", {}) or {}
+        if cookies:
+            curl_data = await fetch_curl_supplement(row_data["asin"], cookies)
+            merge_curl_supplement(result, curl_data)
+        return result
 
     total_processed = 0
     total_success = 0
     total_failed = 0
 
-    for chunk_start in range(0, len(remapped), CHUNK_SIZE):
-        chunk = remapped[chunk_start : chunk_start + CHUNK_SIZE]
+    tasks = [asyncio.create_task(scrape_one(r)) for r in remapped]
+    pending_writes: list[dict] = []
+
+    for coro in asyncio.as_completed(tasks):
         try:
-            chunk_results = await asyncio.gather(*[scrape_one(r) for r in chunk])
-            updates = [_format_update(res) for res in chunk_results]
-            await sheets_client.async_batch_update_rows(sheet_id, new_tab, updates)
-            total_processed += len(chunk_results)
-
-            # Count successes/failures
-            for res in chunk_results:
-                status = res.get("status", "error")
-                if status in ("error", "not_found", "blocked", "invalid_format"):
-                    total_failed += 1
-                else:
-                    total_success += 1
-
+            result = await coro
+        except Exception:
+            logger.exception("Cron: scrape task raised unexpectedly")
+            total_failed += 1
+            total_processed += 1
             app.state.cron_status["progress"] = total_processed
             run_logger.update_progress(run_id, total_success, total_failed)
-            logger.info("Cron: wrote chunk %d–%d to tab '%s' (%d/%d done)",
-                        chunk[0]["row"], chunk[-1]["row"], new_tab, total_processed, len(remapped))
+            continue
+
+        status = result.get("status", "error")
+        if status in ("error", "not_found", "blocked", "invalid_format"):
+            total_failed += 1
+        else:
+            total_success += 1
+        total_processed += 1
+        pending_writes.append(_format_update(result))
+        app.state.cron_status["progress"] = total_processed
+        run_logger.update_progress(run_id, total_success, total_failed)
+
+        if len(pending_writes) >= CHUNK_SIZE:
+            try:
+                await sheets_client.async_batch_update_rows(sheet_id, new_tab, pending_writes)
+                logger.info("Cron: wrote %d rows to '%s' (%d/%d done)",
+                            len(pending_writes), new_tab, total_processed, len(remapped))
+            except Exception:
+                logger.exception("Cron: rolling write failed — continuing")
+            pending_writes = []
+
+    if pending_writes:
+        try:
+            await sheets_client.async_batch_update_rows(sheet_id, new_tab, pending_writes)
+            logger.info("Cron: wrote final %d rows to '%s'", len(pending_writes), new_tab)
         except Exception:
-            logger.exception("Cron: chunk write failed at offset %d — continuing", chunk_start)
+            logger.exception("Cron: final write failed")
 
     elapsed = datetime.now(IST) - run_start
     minutes, seconds = divmod(int(elapsed.total_seconds()), 60)
