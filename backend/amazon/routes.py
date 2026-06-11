@@ -276,10 +276,13 @@ async def scrape_batch_stream(
         async with batch_context(app_state):
             result = await scrape_amazon(row_data["asin"], get_browser(app_state), proxy_manager, skip_curl=True)
             result["row"] = row_data["row"]
-        cookies = result.pop("_cookies", {}) or {}
-        if cookies:
-            curl_data = await fetch_curl_supplement(row_data["asin"], cookies)
-            merge_curl_supplement(result, curl_data)
+        try:
+            cookies = result.pop("_cookies", {}) or {}
+            if cookies:
+                curl_data = await fetch_curl_supplement(row_data["asin"], cookies)
+                merge_curl_supplement(result, curl_data)
+        except Exception:
+            logger.exception("scrape_batch_stream: curl supplement failed for ASIN %s", row_data["asin"])
         await queue.put(result)
 
     async def event_stream():
@@ -368,10 +371,13 @@ async def scrape_manual(body: ManualScrapeRequest, request: Request):
     async def worker(asin: str) -> None:
         async with batch_context(app_state):
             result = await scrape_amazon(asin, get_browser(app_state), proxy_manager, skip_curl=True)
-        cookies = result.pop("_cookies", {}) or {}
-        if cookies:
-            curl_data = await fetch_curl_supplement(asin, cookies)
-            merge_curl_supplement(result, curl_data)
+        try:
+            cookies = result.pop("_cookies", {}) or {}
+            if cookies:
+                curl_data = await fetch_curl_supplement(asin, cookies)
+                merge_curl_supplement(result, curl_data)
+        except Exception:
+            logger.exception("scrape_manual: curl supplement failed for ASIN %s", asin)
         await queue.put(result)
 
     async def event_stream():

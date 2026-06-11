@@ -86,6 +86,8 @@ async def _run_full_scrape(app, tab_prefix: str, run_type: str) -> None:
 
     # Remap row numbers — header is row 1, ASINs start at row 2
     remapped = [{"row": i + 2, "asin": asin} for i, asin in enumerate(asins)]
+    row_to_asin = {r["row"]: r["asin"] for r in remapped}
+    historical_rows: list[list] = []
 
     app.state.cron_status.update({
         "is_running": True,
@@ -136,7 +138,10 @@ async def _run_full_scrape(app, tab_prefix: str, run_type: str) -> None:
             else:
                 total_success += 1
             total_processed += 1
-            pending_writes.append(_format_update(result))
+            fmt = _format_update(result)
+            pending_writes.append(fmt)
+            asin = row_to_asin.get(result.get("row"), "")
+            historical_rows.append([asin] + fmt["values"] + [new_tab])
             app.state.cron_status["progress"] = total_processed
             run_logger.update_progress(run_id, total_success, total_failed)
 
@@ -156,6 +161,13 @@ async def _run_full_scrape(app, tab_prefix: str, run_type: str) -> None:
                 logger.info("Cron: wrote final %d rows to '%s'", len(pending_writes), new_tab)
             except Exception:
                 logger.exception("Cron: final write failed")
+        hist_tab = os.getenv("AMAZON_HISTORICAL_TAB", "Historical")
+        if historical_rows:
+            try:
+                await sheets_client.async_append_to_historical(sheet_id, hist_tab, historical_rows)
+                logger.info("Cron: appended %d rows to '%s'", len(historical_rows), hist_tab)
+            except Exception:
+                logger.exception("Cron: failed to append to historical tab '%s'", hist_tab)
         app.state.cron_status["is_running"] = False
         run_logger.complete_log(run_id, total_success, total_failed, new_tab)
 
