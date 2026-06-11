@@ -5,6 +5,7 @@ No database, no auth — pure request → scrape → return JSON.
 """
 
 import asyncio
+import itertools
 import sys
 
 if sys.platform == "win32":
@@ -44,7 +45,7 @@ from schemas.price import (
 from amazon.scraper import scrape_amazon
 from flipkart.scraper import scrape_flipkart
 from utils.google_sheets import GoogleSheetsClient
-from utils.scrape_helpers import SCRAPE_CONCURRENCY
+from utils.scrape_helpers import SCRAPE_CONCURRENCY, MANUAL_RESERVED, BROWSER_POOL_SIZE, get_browser, sem_with_timeout
 
 load_dotenv()
 
@@ -94,34 +95,47 @@ async def lifespan(app: FastAPI):
     app.state.sheets_client = GoogleSheetsClient()
     app.state.thread_pool = ThreadPoolExecutor(max_workers=SCRAPE_CONCURRENCY * 3)
 
-    # Launch Playwright browser
+    # Launch Playwright browser pool
     headless = os.getenv("PLAYWRIGHT_HEADLESS", "true").lower() == "true"
     playwright_instance = None
-    browser = None
+    _browser_args = [
+        "--no-sandbox",
+        "--disable-blink-features=AutomationControlled",
+        "--disable-infobars",
+        "--window-size=1920,1080",
+    ]
 
     try:
         from playwright.async_api import async_playwright
 
         playwright_instance = await async_playwright().start()
-        browser = await playwright_instance.chromium.launch(
-            headless=headless,
-            args=[
-                "--no-sandbox",
-                "--disable-blink-features=AutomationControlled",
-                "--disable-infobars",
-                "--window-size=1920,1080",
-            ],
-        )
+        browsers = []
+        for i in range(BROWSER_POOL_SIZE):
+            try:
+                b = await playwright_instance.chromium.launch(headless=headless, args=_browser_args)
+                browsers.append(b)
+                logger.info("Browser %d/%d launched (headless=%s)", i + 1, BROWSER_POOL_SIZE, headless)
+            except Exception as e:
+                logger.error("Failed to launch browser %d/%d: %s", i + 1, BROWSER_POOL_SIZE, e)
+
+        if not browsers:
+            raise RuntimeError("No browsers launched — cannot start service")
+
         app.state.playwright_instance = playwright_instance
-        app.state.playwright_browser = browser
+        app.state.browser_pool = browsers
+        app.state.browser_cycle = itertools.cycle(browsers)
         app.state.playwright_ready = True
-        logger.info("Playwright Chromium browser launched (headless=%s)", headless)
 
     except Exception as e:
-        logger.error("Failed to launch Playwright browser: %s", str(e))
+        logger.error("Failed to launch Playwright browser pool: %s", str(e))
         app.state.playwright_instance = None
-        app.state.playwright_browser = None
+        app.state.browser_pool = []
+        app.state.browser_cycle = iter([])
         app.state.playwright_ready = False
+
+    # Semaphores — total_sem hard-caps ALL contexts; batch_throttle reserves headroom for manual requests
+    app.state.total_sem = asyncio.Semaphore(SCRAPE_CONCURRENCY)
+    app.state.batch_throttle = asyncio.Semaphore(max(1, SCRAPE_CONCURRENCY - MANUAL_RESERVED))
 
     app.state.cron_status = {
         "is_running": False,
@@ -190,12 +204,13 @@ async def lifespan(app: FastAPI):
     if getattr(app.state, "thread_pool", None):
         app.state.thread_pool.shutdown(wait=False)
         logger.info("Thread pool stopped")
-    if browser:
+    for b in getattr(app.state, "browser_pool", []):
         try:
-            await browser.close()
-            logger.info("Playwright browser closed")
+            await b.close()
         except Exception:
             pass
+    if getattr(app.state, "browser_pool", []):
+        logger.info("Playwright browser pool closed (%d browsers)", len(app.state.browser_pool))
     if playwright_instance:
         try:
             await playwright_instance.stop()
@@ -315,13 +330,13 @@ async def health_check():
 async def check_both_prices(body: BothRequest, request: Request):
     """Scrape both Amazon.in and Flipkart.in in parallel."""
     proxy_manager = request.app.state.proxy_manager
-    browser = request.app.state.playwright_browser
 
-    # Run both scrapers in parallel
-    amazon_task = scrape_amazon(body.asin, browser, proxy_manager)
-    flipkart_task = scrape_flipkart(body.fsn, browser, proxy_manager)
-
-    amazon_result, flipkart_result = await asyncio.gather(amazon_task, flipkart_task)
+    # Run both scrapers in parallel, each picks a browser from the pool
+    async with sem_with_timeout(request.app.state.total_sem):
+        amazon_result, flipkart_result = await asyncio.gather(
+            scrape_amazon(body.asin, get_browser(request.app.state), proxy_manager),
+            scrape_flipkart(body.fsn, get_browser(request.app.state), proxy_manager),
+        )
 
     # Calculate price difference
     price_diff, cheaper_on = _calculate_price_diff(

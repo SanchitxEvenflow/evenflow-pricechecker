@@ -9,8 +9,8 @@ from datetime import datetime, timezone, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from utils.scrape_helpers import (
+    batch_context,
     CHUNK_SIZE,
-    SCRAPE_CONCURRENCY,
     format_update as _format_update,
     format_flipkart_update as _format_flipkart_update,
     BLINKIT_CITIES,
@@ -19,6 +19,7 @@ from utils.scrape_helpers import (
     format_zepto_row,
     INSTAMART_CITIES,
     format_instamart_row,
+    get_browser,
 )
 
 from amazon.scraper import scrape_amazon
@@ -96,13 +97,11 @@ async def _run_full_scrape(app, tab_prefix: str, run_type: str) -> None:
         "error": None,
     })
 
-    browser = app.state.playwright_browser
     proxy_manager = app.state.proxy_manager
-    sem = asyncio.Semaphore(SCRAPE_CONCURRENCY)
 
     async def scrape_one(row_data: dict) -> dict:
-        async with sem:
-            result = await scrape_amazon(row_data["asin"], browser, proxy_manager)
+        async with batch_context(app.state):
+            result = await scrape_amazon(row_data["asin"], get_browser(app.state), proxy_manager)
             result["row"] = row_data["row"]
             return result
 
@@ -534,9 +533,7 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str) -> Non
     # Import here to avoid circular imports / keep module load light.
     from instamart.scraper import fetch_instamart_data
 
-    browser = app.state.playwright_browser
     proxy_manager = app.state.proxy_manager
-    sem = asyncio.Semaphore(int(os.getenv("INSTAMART_CONCURRENCY", "5")))
 
     total_done = 0
     total_success = 0
@@ -545,8 +542,7 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str) -> Non
     BATCH_SIZE = 100  # Google Sheets API batch limit
 
     async def scrape_one_city(pid_: str, loc: dict) -> dict:
-        """Scrape one city for one PID — bounded by the shared semaphore."""
-        async with sem:
+        async with batch_context(app.state):
             return await fetch_instamart_data(
                 item_id=pid_,
                 pincode=loc.get("pincode", ""),
@@ -554,7 +550,7 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str) -> Non
                 lon=loc["lng"],
                 city=loc["name"],
                 store_id=loc.get("store_id", ""),
-                browser=browser,
+                browser=get_browser(app.state),
                 proxy_manager=proxy_manager,
             )
 
@@ -701,13 +697,11 @@ async def _run_full_flipkart_scrape(app, tab_prefix: str, run_type: str) -> None
         "error": None,
     })
 
-    browser = app.state.playwright_browser
     proxy_manager = app.state.proxy_manager
-    sem = asyncio.Semaphore(SCRAPE_CONCURRENCY)
 
     async def scrape_one(row_data: dict) -> dict:
-        async with sem:
-            result = await scrape_flipkart(row_data["fsn"], browser, proxy_manager)
+        async with batch_context(app.state):
+            result = await scrape_flipkart(row_data["fsn"], get_browser(app.state), proxy_manager)
             result["row"] = row_data["row"]
             return result
 

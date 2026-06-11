@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from amazon.scraper import scrape_amazon
 from schemas.price import AmazonRequest, AmazonResponse
 from utils.google_sheets import GoogleSheetsClient
-from utils.scrape_helpers import CHUNK_SIZE, SCRAPE_CONCURRENCY, format_update
+from utils.scrape_helpers import CHUNK_SIZE, batch_context, format_update, get_browser, sem_with_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +30,9 @@ price_router = APIRouter(prefix="/price", tags=["Price"])
 async def check_amazon_price(body: AmazonRequest, request: Request):
     """Scrape Amazon.in for product price by ASIN."""
     proxy_manager = request.app.state.proxy_manager
-    browser = request.app.state.playwright_browser
 
-    result = await scrape_amazon(body.asin, browser, proxy_manager)
+    async with sem_with_timeout(request.app.state.total_sem):
+        result = await scrape_amazon(body.asin, get_browser(request.app.state), proxy_manager)
 
     return AmazonResponse(
         asin=result["asin"],
@@ -90,9 +90,9 @@ class ConfigResponse(BaseModel):
 _format_update = format_update
 
 
-async def _scrape_with_sem(sem: asyncio.Semaphore, asin: str, row: int, browser, proxy_manager) -> dict:
-    async with sem:
-        result = await scrape_amazon(asin, browser, proxy_manager)
+async def _scrape_with_sem(asin: str, row: int, app_state, proxy_manager) -> dict:
+    async with batch_context(app_state):
+        result = await scrape_amazon(asin, get_browser(app_state), proxy_manager)
         result["row"] = row
         return result
 
@@ -204,19 +204,17 @@ async def scrape_batch(
     sheets_client: GoogleSheetsClient = Depends(get_sheets_client),
 ):
     """Scrape all ASINs with concurrency control, writing to sheets every 50 results."""
-    browser = request.app.state.playwright_browser
     proxy_manager = request.app.state.proxy_manager
 
     if not body.rows:
         return {"status": "success", "message": "No rows to process", "data": []}
 
-    sem = asyncio.Semaphore(SCRAPE_CONCURRENCY)
     all_results: list[dict] = []
 
     for chunk_start in range(0, len(body.rows), CHUNK_SIZE):
         chunk = body.rows[chunk_start : chunk_start + CHUNK_SIZE]
         chunk_results = await asyncio.gather(
-            *[_scrape_with_sem(sem, r["asin"], r["row"], browser, proxy_manager) for r in chunk]
+            *[_scrape_with_sem(r["asin"], r["row"], request.app.state, proxy_manager) for r in chunk]
         )
         updates = [_format_update(res) for res in chunk_results]
         try:
@@ -237,9 +235,7 @@ async def scrape_batch_stream(
 ):
     """Stream scrape results as SSE events. Each ASIN result is sent as it completes.
     Sheets are written every 50 results. Final event: {"done": true, "total": N}."""
-    browser = request.app.state.playwright_browser
     proxy_manager = request.app.state.proxy_manager
-    sem = asyncio.Semaphore(SCRAPE_CONCURRENCY)
     queue: asyncio.Queue = asyncio.Queue()
     total = len(body.rows)
 
@@ -248,9 +244,11 @@ async def scrape_batch_stream(
             yield f"data: {json.dumps({'done': True, 'total': 0})}\n\n"
         return StreamingResponse(empty_stream(), media_type="text/event-stream")
 
+    app_state = request.app.state
+
     async def worker(row_data: dict) -> None:
-        async with sem:
-            result = await scrape_amazon(row_data["asin"], browser, proxy_manager)
+        async with batch_context(app_state):
+            result = await scrape_amazon(row_data["asin"], get_browser(app_state), proxy_manager)
             result["row"] = row_data["row"]
             await queue.put(result)
 
@@ -298,10 +296,9 @@ def _validate_asin(asin: str) -> bool:
 @manual_router.post("/scrape-manual")
 async def scrape_manual(body: ManualScrapeRequest, request: Request):
     """Scrape a list of ASINs manually. Results are streamed via SSE — no sheet writes."""
-    browser = request.app.state.playwright_browser
     proxy_manager = request.app.state.proxy_manager
 
-    if not browser:
+    if not request.app.state.playwright_ready:
         raise HTTPException(status_code=503, detail="Playwright browser not available")
 
     # Clean, deduplicate, validate
@@ -323,8 +320,8 @@ async def scrape_manual(body: ManualScrapeRequest, request: Request):
         raise HTTPException(status_code=400, detail="No ASINs provided")
 
     total = len(clean_asins) + len(invalid_asins)
-    sem = asyncio.Semaphore(SCRAPE_CONCURRENCY)
     queue: asyncio.Queue = asyncio.Queue()
+    app_state = request.app.state
 
     # Push invalid ASINs as immediate errors
     for asin in invalid_asins:
@@ -339,8 +336,8 @@ async def scrape_manual(body: ManualScrapeRequest, request: Request):
         })
 
     async def worker(asin: str) -> None:
-        async with sem:
-            result = await scrape_amazon(asin, browser, proxy_manager)
+        async with batch_context(app_state):
+            result = await scrape_amazon(asin, get_browser(app_state), proxy_manager)
             await queue.put(result)
 
     async def event_stream():

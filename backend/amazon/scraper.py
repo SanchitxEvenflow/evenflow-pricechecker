@@ -244,11 +244,14 @@ def _detect_status(soup: BeautifulSoup, response_text: str, asin: str, page_url:
         canonical_href = canonical["href"]
         match = re.search(r"/dp/([A-Z0-9]{10})", canonical_href, re.IGNORECASE)
         if match and match.group(1).upper() != asin.upper():
-            # Variant ASINs canonicalize to parent/sibling — only suppress if
-            # the product title is also missing (page truly loaded the wrong product)
+            # If the browser URL also changed to a different ASIN → genuine redirect
+            url_match = re.search(r"/dp/([A-Z0-9]{10})", page_url, re.IGNORECASE)
+            if url_match and url_match.group(1).upper() != asin.upper():
+                return "suppressed"
+            # Canonical mismatch but URL stayed on requested ASIN → variant canonical, safe to continue
             if not soup.select_one("#productTitle"):
                 return "suppressed"
-            logger.debug("Canonical ASIN mismatch for %s → %s but title present, continuing", asin, match.group(1))
+            logger.debug("Canonical ASIN mismatch for %s → %s but URL consistent, continuing", asin, match.group(1))
 
     title_el = soup.select_one("#productTitle")
     if not title_el:

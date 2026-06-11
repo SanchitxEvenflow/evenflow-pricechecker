@@ -11,12 +11,11 @@ from instamart.locations import LOCATIONS, LOCATIONS_BY_CITY, CITY_NAMES
 from instamart.scraper import fetch_instamart_data
 from schemas.price import InstamartRequest, InstamartAllCitiesRequest, InstamartResponse
 from utils.google_sheets import GoogleSheetsClient
+from utils.scrape_helpers import batch_context, get_browser, sem_with_timeout
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["instamart"])
-
-INSTAMART_CONCURRENCY = 5  # instamart rate-limits aggressively
 
 
 # ── Single city lookup ──────────────────────────────────────────────────────
@@ -32,17 +31,17 @@ async def check_instamart_price(body: InstamartRequest, request: Request):
         )
 
     proxy_manager = request.app.state.proxy_manager
-    browser = request.app.state.playwright_browser
 
-    result = await fetch_instamart_data(
-        item_id=body.product_id,
-        lat=city_data["lat"],
-        lon=city_data["lng"],
-        city=body.city,
-        store_id=city_data["store_id"],
-        browser=browser,
-        proxy_manager=proxy_manager,
-    )
+    async with sem_with_timeout(request.app.state.total_sem):
+        result = await fetch_instamart_data(
+            item_id=body.product_id,
+            lat=city_data["lat"],
+            lon=city_data["lng"],
+            city=body.city,
+            store_id=city_data["store_id"],
+            browser=get_browser(request.app.state),
+            proxy_manager=proxy_manager,
+        )
 
     return InstamartResponse(**result)
 
@@ -56,9 +55,8 @@ async def check_instamart_all_cities(body: InstamartAllCitiesRequest, request: R
     Results are streamed as SSE events as they complete.
     """
     proxy_manager = request.app.state.proxy_manager
-    browser = request.app.state.playwright_browser
-    sem = asyncio.Semaphore(INSTAMART_CONCURRENCY)
     queue: asyncio.Queue = asyncio.Queue()
+    app_state = request.app.state
 
     # Build work items: (product_id, city_data)
     work_items = [
@@ -74,14 +72,14 @@ async def check_instamart_all_cities(body: InstamartAllCitiesRequest, request: R
         return StreamingResponse(empty_stream(), media_type="text/event-stream")
 
     async def worker(product_id: str, loc: dict) -> None:
-        async with sem:
+        async with batch_context(app_state):
             result = await fetch_instamart_data(
                 item_id=product_id,
                 lat=loc["lat"],
                 lon=loc["lng"],
                 city=loc["name"],
                 store_id=loc["store_id"],
-                browser=browser,
+                browser=get_browser(app_state),
                 proxy_manager=proxy_manager,
             )
             await queue.put(result)
