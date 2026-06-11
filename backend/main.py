@@ -72,8 +72,8 @@ async def lifespan(app: FastAPI):
     """Startup: init ProxyManager + launch Playwright browser. Shutdown: close browser."""
     # Monkey-patch IocpProactor.accept to prevent WinError 87 from killing the accept loop
     if sys.platform == "win32":
-        import asyncio.windows_events
-        _orig_accept = asyncio.windows_events.IocpProactor.accept
+        import asyncio.windows_events as _aio_win_events
+        _orig_accept = _aio_win_events.IocpProactor.accept
         def _patched_accept(self, listener):
             try:
                 return _orig_accept(self, listener)
@@ -83,7 +83,7 @@ async def lifespan(app: FastAPI):
                     # ECONNABORTED (10053) is caught and ignored by the loop, keeping it alive
                     raise OSError(0, "Connection aborted", None, 10053) from exc
                 raise
-        asyncio.windows_events.IocpProactor.accept = _patched_accept
+        _aio_win_events.IocpProactor.accept = _patched_accept
 
     # Initialize proxy manager
     proxy_file = os.getenv("PROXY_FILE", "proxies.txt")
