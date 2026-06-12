@@ -296,13 +296,10 @@ async def _handle_interstitial(page) -> bool:
             except Exception:
                 continue
 
-        await page.wait_for_load_state("networkidle", timeout=8000)
-        # Wait for product title + ratings section
+        # Amazon never reaches networkidle (constant telemetry requests) — wait for
+        # the title directly; the ratings histogram comes from the curl supplement.
         try:
             await page.wait_for_selector("#productTitle", timeout=10000)
-            # Wait extra for ratings widget
-            await page.wait_for_selector("[data-hook*='ratings'], .cr-ratings-histogram, #acrCustomerReviewLink", 
-                                         timeout=8000)
         except Exception:
             pass
 
@@ -457,18 +454,18 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
             await page.goto(url, wait_until="domcontentloaded", timeout=30000)
 
             logger.info("Page landed at: %s", page.url)
-            await _handle_interstitial(page)
+            interstitial_seen = await _handle_interstitial(page)
 
-            # Wait for product title to appear — handles deferred JS rendering
-            try:
-                await page.wait_for_selector("#productTitle", timeout=8000)
-            except Exception:
-                pass  # _detect_status will return not_found if still missing
-
+            # Only wait for title if we didn't already wait inside the interstitial handler
+            if not interstitial_seen:
+                try:
+                    await page.wait_for_selector("#productTitle", timeout=8000)
+                except Exception:
+                    pass  # _detect_status will return not_found if still missing
 
             html = await page.content()
-            body_text = await page.inner_text("body")
             soup = BeautifulSoup(html, "html.parser")
+            body_text = soup.get_text(" ", strip=True)
 
             if DEBUG_MODE:
                 await _save_debug(page, asin, attempt)
@@ -484,6 +481,12 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
                     await asyncio.sleep(5)
                     continue
                 return {**_empty, "status": "blocked", "checked_at": datetime.now(IST).isoformat()}
+
+            if status == "not_found" and interstitial_seen and attempt < max_proxy_attempts:
+                # Title missing right after a bot-check click-through — the page likely
+                # never finished loading the real product. Retry, don't trust not_found.
+                logger.warning("not_found after interstitial for ASIN %s — retrying with new proxy", asin)
+                continue
 
             if status in ("unavailable", "suppressed", "not_found"):
                 proxy_manager.report_success(proxy)
