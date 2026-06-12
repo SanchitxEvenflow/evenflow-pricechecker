@@ -234,9 +234,11 @@ def _detect_status(soup: BeautifulSoup, response_text: str, asin: str, page_url:
     if availability_el:
         avail_text = availability_el.get_text(strip=True).lower()
         if "currently unavailable" in avail_text or "out of stock" in avail_text:
-            # Only mark unavailable if no price is visible — product may still be listed
+            # Only mark unavailable if no price AND no buy button — availability element
+            # can be stale/wrong for variant products; a buy button is the ground truth.
             has_price = any(soup.select_one(sel) for sel in PRICE_SELECTORS)
-            if not has_price:
+            has_buy = soup.select_one("#add-to-cart-button") or soup.select_one("#buy-now-button")
+            if not has_price and not has_buy:
                 return "unavailable"
 
     canonical = soup.select_one('link[rel="canonical"]')
@@ -345,7 +347,7 @@ def _fetch_curl_data_sync(asin: str, cookies: dict = None) -> dict:
     _empty_breakdown = {"5_star": None, "4_star": None, "3_star": None, "2_star": None, "1_star": None}
     _empty_rank = {"rank_raw": None, "rank_value": None, "rank_category": None, "sub_rank_value": None, "sub_rank_category": None}
     _empty_category = {"parent_node": None, "child_node": None, "category_path": None}
-    url = f"https://www.amazon.in/dp/{asin}"
+    url = f"https://www.amazon.in/dp/{asin}?th=1"
     try:
         resp = curl_requests.get(
             url,
@@ -402,7 +404,7 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
     Tries up to min(5, pool_size) proxies then falls back to a direct connection.
     Always returns a dict — never raises exceptions to the caller.
     """
-    url = f"https://www.amazon.in/dp/{asin}"
+    url = f"https://www.amazon.in/dp/{asin}?th=1"
 
     _empty = {
         "asin": asin, "price": "", "mrp": None, "rating": None, "rating_count": None,
