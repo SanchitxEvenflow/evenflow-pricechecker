@@ -124,8 +124,19 @@ async def trigger_manual_blinkit(request: Request):
     if request.app.state.blinkit_cron_status.get("is_running"):
         raise HTTPException(status_code=409, detail="A Blinkit scrape run is already in progress")
     from scheduler import run_manual_blinkit_trigger
-    asyncio.create_task(run_manual_blinkit_trigger(request.app))
+    task = asyncio.create_task(run_manual_blinkit_trigger(request.app))
+    request.app.state.blinkit_cron_task = task
     return {"status": "started"}
+
+
+@router.post("/blinkit/api/cancel-manual-scheduler")
+async def cancel_manual_blinkit(request: Request):
+    """Cancel a running Blinkit manual scrape."""
+    task = request.app.state.blinkit_cron_task
+    if task and not task.done():
+        task.cancel()
+        return {"status": "cancelling"}
+    raise HTTPException(status_code=409, detail="No running Blinkit scrape to cancel")
 
 
 @router.get("/blinkit/cron-status")

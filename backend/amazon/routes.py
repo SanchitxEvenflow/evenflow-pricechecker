@@ -184,8 +184,19 @@ async def trigger_manual_scheduler(request: Request):
     if request.app.state.cron_status.get("is_running"):
         raise HTTPException(status_code=409, detail="A scrape run is already in progress")
     from scheduler import run_manual_trigger
-    asyncio.create_task(run_manual_trigger(request.app))
+    task = asyncio.create_task(run_manual_trigger(request.app))
+    request.app.state.cron_task = task
     return {"status": "started"}
+
+
+@sheets_router.post("/api/cancel-manual-scheduler")
+async def cancel_manual_scheduler(request: Request):
+    """Cancel a running Amazon manual scrape."""
+    task = request.app.state.cron_task
+    if task and not task.done():
+        task.cancel()
+        return {"status": "cancelling"}
+    raise HTTPException(status_code=409, detail="No running scrape to cancel")
 
 @sheets_router.post("/api/trigger-manual-blinkit")
 async def trigger_manual_blinkit(request: Request):

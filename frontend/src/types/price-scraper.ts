@@ -8,6 +8,7 @@ export interface RatingBreakdown {
 
 export interface ScrapeResult {
   asin: string;
+  title?: string;
   price?: string;
   rating?: string;
   rating_count?: string;
@@ -50,6 +51,7 @@ export interface CronStatus {
 
 export interface FlipkartScrapeResult {
   fsn: string;
+  title?: string;
   price?: string;
   mrp?: string;
   discount?: string;

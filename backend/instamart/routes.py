@@ -116,8 +116,19 @@ async def trigger_manual_instamart(request: Request):
     if request.app.state.instamart_cron_status.get("is_running"):
         raise HTTPException(status_code=409, detail="An instamart scrape run is already in progress")
     from scheduler import run_manual_instamart_trigger
-    asyncio.create_task(run_manual_instamart_trigger(request.app))
+    task = asyncio.create_task(run_manual_instamart_trigger(request.app))
+    request.app.state.instamart_cron_task = task
     return {"status": "started"}
+
+
+@router.post("/instamart/api/cancel-manual-scheduler")
+async def cancel_manual_instamart(request: Request):
+    """Cancel a running Instamart manual scrape."""
+    task = request.app.state.instamart_cron_task
+    if task and not task.done():
+        task.cancel()
+        return {"status": "cancelling"}
+    raise HTTPException(status_code=409, detail="No running Instamart scrape to cancel")
 
 
 @router.get("/instamart/cron-status")

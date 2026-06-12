@@ -15,7 +15,8 @@ export function useAmazonManualScrape() {
   const [error, setError] = useState("");
   const [stats, setStats] = useState({ total: 0, processed: 0, remaining: 0, success: 0, failed: 0 });
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const { data: sheetProducts, loading: productsLoading } = useCachedProducts(`${API}/sheets/amazon/products`);
+  const { data: rawSheetProducts, loading: productsLoading } = useCachedProducts(`${API}/sheets/amazon/products`);
+  const sheetProducts = rawSheetProducts.filter((p, i, arr) => arr.findIndex(x => x.id === p.id) === i);
 
   const toggleProduct = (id: string) =>
     setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
@@ -27,7 +28,10 @@ export function useAmazonManualScrape() {
     if (asins.length === 0) { setError("Please enter or select at least one ASIN"); return; }
     setError("");
     setIsScraping(true);
-    setResults(asins.map(a => ({ asin: a, status: "pending" })));
+    setResults(asins.map(a => {
+      const p = sheetProducts.find(x => x.id === a);
+      return { asin: a, status: "pending", title: p?.title };
+    }));
     setStats({ total: asins.length, processed: 0, remaining: asins.length, success: 0, failed: 0 });
 
     try {
@@ -72,7 +76,7 @@ export function useAmazonManualScrape() {
     if (results.length === 0) return;
 
     const headers = [
-      "ASIN", "Status", "Price", "Rating", "Rating Count", "Rating Breakdown",
+      "ASIN", "Title", "Status", "Price", "Rating", "Rating Count", "Rating Breakdown",
       "Parent Node", "Parent Rank", "Child Node", "Child Rank", "URL"
     ];
 
@@ -87,6 +91,7 @@ export function useAmazonManualScrape() {
 
       return [
         csvEscape(r.asin),
+        csvEscape(r.title || ""),
         csvEscape(r.status),
         cleanNum(r.price),
         cleanNum(r.rating),

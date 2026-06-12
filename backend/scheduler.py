@@ -154,22 +154,27 @@ async def _run_full_scrape(app, tab_prefix: str, run_type: str) -> None:
                     logger.exception("Cron: rolling write failed — continuing")
                 pending_writes = []
     finally:
+        for t in tasks:
+            if not t.done():
+                t.cancel()
         # Flush any buffered writes even if cancelled or exception escapes
-        if pending_writes:
-            try:
-                await sheets_client.async_batch_update_rows(sheet_id, new_tab, pending_writes)
-                logger.info("Cron: wrote final %d rows to '%s'", len(pending_writes), new_tab)
-            except Exception:
-                logger.exception("Cron: final write failed")
-        hist_tab = os.getenv("AMAZON_HISTORICAL_TAB", "Historical")
-        if historical_rows:
-            try:
-                await sheets_client.async_append_to_historical(sheet_id, hist_tab, historical_rows)
-                logger.info("Cron: appended %d rows to '%s'", len(historical_rows), hist_tab)
-            except Exception:
-                logger.exception("Cron: failed to append to historical tab '%s'", hist_tab)
-        app.state.cron_status["is_running"] = False
-        run_logger.complete_log(run_id, total_success, total_failed, new_tab)
+        try:
+            if pending_writes:
+                try:
+                    await sheets_client.async_batch_update_rows(sheet_id, new_tab, pending_writes)
+                    logger.info("Cron: wrote final %d rows to '%s'", len(pending_writes), new_tab)
+                except (Exception, asyncio.CancelledError):
+                    logger.exception("Cron: final write failed")
+            hist_tab = os.getenv("AMAZON_HISTORICAL_TAB", "Historical")
+            if historical_rows:
+                try:
+                    await sheets_client.async_append_to_historical(sheet_id, hist_tab, historical_rows)
+                    logger.info("Cron: appended %d rows to '%s'", len(historical_rows), hist_tab)
+                except (Exception, asyncio.CancelledError):
+                    logger.exception("Cron: failed to append to historical tab '%s'", hist_tab)
+        finally:
+            app.state.cron_status["is_running"] = False
+            run_logger.complete_log(run_id, total_success, total_failed, new_tab)
 
     elapsed = datetime.now(IST) - run_start
     minutes, seconds = divmod(int(elapsed.total_seconds()), 60)
@@ -331,14 +336,19 @@ async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str) -> None:
                         logger.exception("Blinkit: failed to write batch")
                         batch_updates = []
     finally:
-        if batch_updates:
-            try:
-                await sheets_client.async_batch_update_blinkit_rows(sheet_id, new_tab, batch_updates)
-                logger.info("Blinkit: flushed final %d rows on shutdown", len(batch_updates))
-            except Exception:
-                logger.exception("Blinkit: final flush failed on shutdown")
-        app.state.blinkit_cron_status["is_running"] = False
-        run_logger.complete_log(run_id, total_success, total_failed, new_tab)
+        for t in all_tasks:
+            if not t.done():
+                t.cancel()
+        try:
+            if batch_updates:
+                try:
+                    await sheets_client.async_batch_update_blinkit_rows(sheet_id, new_tab, batch_updates)
+                    logger.info("Blinkit: flushed final %d rows on shutdown", len(batch_updates))
+                except (Exception, asyncio.CancelledError):
+                    logger.exception("Blinkit: final flush failed on shutdown")
+        finally:
+            app.state.blinkit_cron_status["is_running"] = False
+            run_logger.complete_log(run_id, total_success, total_failed, new_tab)
 
     logger.info("Blinkit: all %d PIDs processed — tab '%s'", len(pids), new_tab)
 
@@ -494,14 +504,19 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str) -> None:
                         logger.exception("Zepto: failed to write batch")
                         batch_updates = []
     finally:
-        if batch_updates:
-            try:
-                await sheets_client.async_batch_update_zepto_rows(sheet_id, new_tab, batch_updates)
-                logger.info("Zepto: flushed final %d rows on shutdown", len(batch_updates))
-            except Exception:
-                logger.exception("Zepto: final flush failed on shutdown")
-        app.state.zepto_cron_status["is_running"] = False
-        run_logger.complete_log(run_id, total_success, total_failed, new_tab)
+        for t in all_tasks:
+            if not t.done():
+                t.cancel()
+        try:
+            if batch_updates:
+                try:
+                    await sheets_client.async_batch_update_zepto_rows(sheet_id, new_tab, batch_updates)
+                    logger.info("Zepto: flushed final %d rows on shutdown", len(batch_updates))
+                except (Exception, asyncio.CancelledError):
+                    logger.exception("Zepto: final flush failed on shutdown")
+        finally:
+            app.state.zepto_cron_status["is_running"] = False
+            run_logger.complete_log(run_id, total_success, total_failed, new_tab)
 
     elapsed = datetime.now(IST) - run_start
     minutes, seconds = divmod(int(elapsed.total_seconds()), 60)
@@ -665,14 +680,19 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str) -> Non
                         logger.exception("Instamart: failed to write batch")
                         batch_updates = []
     finally:
-        if batch_updates:
-            try:
-                await sheets_client.async_batch_update_instamart_rows(sheet_id, new_tab, batch_updates)
-                logger.info("Instamart: flushed final %d rows on shutdown", len(batch_updates))
-            except Exception:
-                logger.exception("Instamart: final flush failed on shutdown")
-        app.state.instamart_cron_status["is_running"] = False
-        run_logger.complete_log(run_id, total_success, total_failed, new_tab)
+        for t in all_tasks:
+            if not t.done():
+                t.cancel()
+        try:
+            if batch_updates:
+                try:
+                    await sheets_client.async_batch_update_instamart_rows(sheet_id, new_tab, batch_updates)
+                    logger.info("Instamart: flushed final %d rows on shutdown", len(batch_updates))
+                except (Exception, asyncio.CancelledError):
+                    logger.exception("Instamart: final flush failed on shutdown")
+        finally:
+            app.state.instamart_cron_status["is_running"] = False
+            run_logger.complete_log(run_id, total_success, total_failed, new_tab)
 
     elapsed = datetime.now(IST) - run_start
     minutes, seconds = divmod(int(elapsed.total_seconds()), 60)
@@ -804,14 +824,19 @@ async def _run_full_flipkart_scrape(app, tab_prefix: str, run_type: str) -> None
                     logger.exception("Flipkart cron: rolling write failed — continuing")
                 pending_writes = []
     finally:
-        if pending_writes:
-            try:
-                await sheets_client.async_batch_update_flipkart_rows(sheet_id, new_tab, pending_writes)
-                logger.info("Flipkart cron: wrote final %d rows to '%s'", len(pending_writes), new_tab)
-            except Exception:
-                logger.exception("Flipkart cron: final write failed")
-        app.state.flipkart_cron_status["is_running"] = False
-        run_logger.complete_log(run_id, total_success, total_failed, new_tab)
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+        try:
+            if pending_writes:
+                try:
+                    await sheets_client.async_batch_update_flipkart_rows(sheet_id, new_tab, pending_writes)
+                    logger.info("Flipkart cron: wrote final %d rows to '%s'", len(pending_writes), new_tab)
+                except (Exception, asyncio.CancelledError):
+                    logger.exception("Flipkart cron: final write failed")
+        finally:
+            app.state.flipkart_cron_status["is_running"] = False
+            run_logger.complete_log(run_id, total_success, total_failed, new_tab)
 
     elapsed = datetime.now(IST) - run_start
     minutes, seconds = divmod(int(elapsed.total_seconds()), 60)

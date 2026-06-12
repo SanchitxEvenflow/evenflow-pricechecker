@@ -183,8 +183,19 @@ async def trigger_manual_flipkart_scheduler(request: Request):
     if request.app.state.flipkart_cron_status.get("is_running"):
         raise HTTPException(status_code=409, detail="A Flipkart scrape run is already in progress")
     from scheduler import run_manual_flipkart_trigger
-    asyncio.create_task(run_manual_flipkart_trigger(request.app))
+    task = asyncio.create_task(run_manual_flipkart_trigger(request.app))
+    request.app.state.flipkart_cron_task = task
     return {"status": "started"}
+
+
+@sheets_router.post("/api/cancel-manual-scheduler")
+async def cancel_manual_flipkart_scheduler(request: Request):
+    """Cancel a running Flipkart manual scrape."""
+    task = request.app.state.flipkart_cron_task
+    if task and not task.done():
+        task.cancel()
+        return {"status": "cancelling"}
+    raise HTTPException(status_code=409, detail="No running Flipkart scrape to cancel")
 
 
 @sheets_router.get("/cron-status")

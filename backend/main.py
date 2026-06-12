@@ -199,6 +199,12 @@ async def lifespan(app: FastAPI):
         "error": None,
     }
 
+    app.state.cron_task = None
+    app.state.blinkit_cron_task = None
+    app.state.flipkart_cron_task = None
+    app.state.zepto_cron_task = None
+    app.state.instamart_cron_task = None
+
     app.state.cron_scheduler = setup_scheduler(app)
     if app.state.cron_scheduler:
         logger.info("Cron scheduler active — next run at %02d:%02d IST",

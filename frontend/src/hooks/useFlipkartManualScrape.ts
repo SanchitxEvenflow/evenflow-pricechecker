@@ -27,7 +27,10 @@ export function useFlipkartManualScrape() {
     if (fsns.length === 0) { setError("Please enter or select at least one FSN"); return; }
     setError("");
     setIsScraping(true);
-    setResults(fsns.map(f => ({ fsn: f, status: "pending" })));
+    setResults(fsns.map(f => {
+      const p = sheetProducts.find(x => x.id === f);
+      return { fsn: f, status: "pending", title: p?.title };
+    }));
     setStats({ total: fsns.length, processed: 0, remaining: fsns.length, success: 0, failed: 0 });
 
     try {
@@ -69,10 +72,11 @@ export function useFlipkartManualScrape() {
 
   const downloadCSV = () => {
     if (results.length === 0) return;
-    const headers = ["FSN", "Status", "Price", "MRP", "Discount", "Rating", "Rating Count", "Fulfilled By", "URL"];
+    const headers = ["FSN", "Title", "Status", "Price", "MRP", "Discount", "Rating", "Rating Count", "Fulfilled By", "URL"];
     const cleanNum = (v?: string) => v ? v.replace(/[₹,]/g, "") : "";
     const rows = results.map(r => [
       csvEscape(r.fsn),
+      csvEscape(r.title || ""),
       csvEscape(r.status),
       cleanNum(r.price),
       cleanNum(r.mrp),

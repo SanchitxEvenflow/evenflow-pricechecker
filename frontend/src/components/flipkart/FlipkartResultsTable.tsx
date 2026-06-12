@@ -16,7 +16,7 @@ export function FlipkartResultsTable({ t, results, onDownloadCSV }: { t: ThemeCl
         <table className="w-full text-left border-collapse">
           <thead>
             <tr className={`border-b ${t.border} ${t.thead}`}>
-              {["FSN", "Status", "Price", "MRP", "Discount", "Rating", "Rating Count", "Fulfilled By", "URL"].map(h => (
+              {["FSN", "Title", "Status", "Price", "MRP", "Discount", "Rating", "Rating Count", "Fulfilled By", "URL"].map(h => (
                 <th key={h} className={`px-4 py-4 text-xs font-semibold ${t.muted} uppercase tracking-wider`}>{h}</th>
               ))}
             </tr>
@@ -25,6 +25,7 @@ export function FlipkartResultsTable({ t, results, onDownloadCSV }: { t: ThemeCl
             {results.map(r => (
               <tr key={r.fsn} className="transition-colors">
                 <td className="px-4 py-4 whitespace-nowrap text-sm font-medium font-mono">{r.fsn}</td>
+                <td className="px-4 py-4 whitespace-nowrap text-sm truncate max-w-[200px]" title={r.title || ""}>{r.title || "—"}</td>
                 <td className="px-4 py-4 whitespace-nowrap text-sm"><Badge status={r.status} /></td>
                 <td className={`px-4 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.price || "—"}</td>
                 <td className={`px-4 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.mrp || "—"}</td>

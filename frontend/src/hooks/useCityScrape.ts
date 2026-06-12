@@ -79,9 +79,10 @@ export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>)
   const downloadCSV = () => {
     const pids = Object.keys(results);
     if (!pids.length) return;
-    const hdr = ["Product ID", ...config.cities.flatMap(c => [`${c} Price`, `${c} MRP`, `${c} Status`])];
+    const hdr = ["Product ID", "Title", ...config.cities.flatMap(c => [`${c} Price`, `${c} MRP`, `${c} Status`])];
     const rows = pids.map(pid => {
-      const cells: string[] = [csvEscape(pid)];
+      const title = sheetProducts?.find(x => x.id === pid)?.title || Object.values(results[pid])[0]?.title || "";
+      const cells: string[] = [csvEscape(pid), csvEscape(title)];
       config.cities.forEach(c => {
         const r = results[pid]?.[c];
         cells.push(

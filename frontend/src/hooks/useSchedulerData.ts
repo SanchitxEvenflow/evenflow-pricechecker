@@ -16,6 +16,11 @@ export function useSchedulerData() {
   const [isFlipkartTriggering, setIsFlipkartTriggering] = useState(false);
   const [isZeptoTriggering, setIsZeptoTriggering] = useState(false);
   const [isInstamartTriggering, setIsInstamartTriggering] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
+  const [isBlinkitCancelling, setIsBlinkitCancelling] = useState(false);
+  const [isFlipkartCancelling, setIsFlipkartCancelling] = useState(false);
+  const [isZeptoCancelling, setIsZeptoCancelling] = useState(false);
+  const [isInstamartCancelling, setIsInstamartCancelling] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [toast, setToast] = useState<SchedulerToast | null>(null);
 
@@ -77,6 +82,34 @@ export function useSchedulerData() {
   const handleZeptoTrigger = makeTrigger("/price/zepto/api/trigger-manual-scheduler", setIsZeptoTriggering, "Zepto manual scrape triggered! Check progress below.");
   const handleInstamartTrigger = makeTrigger("/price/instamart/api/trigger-manual-scheduler", setIsInstamartTriggering, "Instamart manual scrape triggered! Check progress below.");
 
+  const makeCancel = (
+    endpoint: string,
+    setIsCancellingState: (val: boolean) => void
+  ) => async () => {
+    setIsCancellingState(true);
+    setToast(null);
+    try {
+      const res = await authFetch(`${API}${endpoint}`, { method: "POST" });
+      if (res.ok) {
+        setToast({ type: "success", msg: "Cancellation requested. Scrape will stop shortly." });
+        setTimeout(fetchAllStatus, 2000);
+      } else {
+        const data = await res.json();
+        setToast({ type: "error", msg: data.detail || "Failed to cancel scrape" });
+      }
+    } catch (e: unknown) {
+      setToast({ type: "error", msg: errorMessage(e) });
+    } finally {
+      setIsCancellingState(false);
+    }
+  };
+
+  const handleCancel = makeCancel("/sheets/amazon/api/cancel-manual-scheduler", setIsCancelling);
+  const handleBlinkitCancel = makeCancel("/price/blinkit/api/cancel-manual-scheduler", setIsBlinkitCancelling);
+  const handleFlipkartCancel = makeCancel("/sheets/flipkart/api/cancel-manual-scheduler", setIsFlipkartCancelling);
+  const handleZeptoCancel = makeCancel("/price/zepto/api/cancel-manual-scheduler", setIsZeptoCancelling);
+  const handleInstamartCancel = makeCancel("/price/instamart/api/cancel-manual-scheduler", setIsInstamartCancelling);
+
   return {
     cronStatus,
     blinkitStatus,
@@ -88,6 +121,11 @@ export function useSchedulerData() {
     isFlipkartTriggering,
     isZeptoTriggering,
     isInstamartTriggering,
+    isCancelling,
+    isBlinkitCancelling,
+    isFlipkartCancelling,
+    isZeptoCancelling,
+    isInstamartCancelling,
     logs,
     toast,
     setToast,
@@ -97,5 +135,10 @@ export function useSchedulerData() {
     handleFlipkartTrigger,
     handleZeptoTrigger,
     handleInstamartTrigger,
+    handleCancel,
+    handleBlinkitCancel,
+    handleFlipkartCancel,
+    handleZeptoCancel,
+    handleInstamartCancel,
   };
 }
