@@ -40,7 +40,7 @@ from flipkart.routes import sheets_router as flipkart_sheets_router
 from blinkit.routes import router as blinkit_router
 from zepto.routes import router as zepto_router
 from instamart.routes import router as instamart_router
-# from scheduler import setup_scheduler  # cron disabled
+from scheduler import setup_scheduler
 from schemas.price import (
     AmazonResponse,
     BothRequest,
@@ -199,9 +199,11 @@ async def lifespan(app: FastAPI):
         "error": None,
     }
 
-    # app.state.cron_scheduler = setup_scheduler(app)  # cron disabled
-    # if app.state.cron_scheduler:
-    #     logger.info("Cron scheduler active — interval=%s min", os.getenv("CRON_INTERVAL_MINUTES", "60"))
+    app.state.cron_scheduler = setup_scheduler(app)
+    if app.state.cron_scheduler:
+        logger.info("Cron scheduler active — next run at %02d:%02d IST",
+                    int(os.getenv("AMAZON_CRON_HOUR", "10")),
+                    int(os.getenv("AMAZON_CRON_MINUTE", "0")))
 
     logger.info("Price Checker service ready!")
 
