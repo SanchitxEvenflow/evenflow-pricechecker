@@ -163,23 +163,62 @@ async def fetch_instamart_data(
                     continue
                 return _error_result("blocked")
 
+            if "oops something's not right" in lower:
+                logger.info("[Instamart] %s: Oops error page — item not available", city)
+                if proxy_manager:
+                    proxy_manager.report_success(proxy)
+                await _safe_close_context(context)
+                context = None
+                return {
+                    "product_id": item_id,
+                    "city": city,
+                    "title": None,
+                    "price": None,
+                    "mrp": None,
+                    "status": "not_found",
+                    "is_sold_out": False,
+                    "url": product_url,
+                    "checked_at": now,
+                }
+
             # ── Extract embedded JSON state ────────────────────────────────
             scripts = re.findall(r"<script.*?>(.*?)</script>", content, re.DOTALL)
             target_script = None
+            has_initial_state = False
             for s in scripts:
-                if item_id in s and "window.___INITIAL_STATE___" in s:
-                    target_script = s
-                    break
+                if "window.___INITIAL_STATE___" in s:
+                    has_initial_state = True
+                    if item_id in s:
+                        target_script = s
+                        break
 
             if not target_script:
-                logger.warning("[Instamart] %s: embedded state script not found", city)
-                if proxy_manager:
-                    proxy_manager.report_failure(proxy)
-                await _safe_close_context(context)
-                context = None
-                if attempt < max_proxy_attempts:
-                    continue
-                return _error_result("state_script_not_found")
+                if has_initial_state:
+                    logger.info("[Instamart] %s: initial state found but item_id missing — item not available", city)
+                    if proxy_manager:
+                        proxy_manager.report_success(proxy)
+                    await _safe_close_context(context)
+                    context = None
+                    return {
+                        "product_id": item_id,
+                        "city": city,
+                        "title": None,
+                        "price": None,
+                        "mrp": None,
+                        "status": "not_found",
+                        "is_sold_out": False,
+                        "url": product_url,
+                        "checked_at": now,
+                    }
+                else:
+                    logger.warning("[Instamart] %s: embedded state script not found", city)
+                    if proxy_manager:
+                        proxy_manager.report_failure(proxy)
+                    await _safe_close_context(context)
+                    context = None
+                    if attempt < max_proxy_attempts:
+                        continue
+                    return _error_result("state_script_not_found")
 
             match = re.search(r"window\.___INITIAL_STATE___\s*=\s*(.*?);\s*(?:window\.|var\s|let\s|const\s)", target_script, re.DOTALL)
             if not match:
