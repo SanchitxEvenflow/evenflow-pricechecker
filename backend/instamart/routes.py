@@ -74,12 +74,16 @@ async def check_instamart_all_cities(body: InstamartAllCitiesRequest, request: R
 
     async def worker(product_id: str, loc: dict) -> None:
         async with sem:
+            # If city name is duplicated (like Bangalore), append the area to make it unique for the frontend
+            is_duplicate = sum(1 for l in LOCATIONS if l["name"] == loc["name"]) > 1
+            display_city = f"{loc['name']} - {loc['area']}" if is_duplicate else loc["name"]
+
             result = await fetch_instamart_data(
                 item_id=product_id,
                 pincode=loc["pincode"],
                 lat=loc["lat"],
                 lon=loc["lng"],
-                city=loc["name"],
+                city=display_city,
                 store_id=loc["store_id"],
                 browser=browser,
                 proxy_manager=proxy_manager,
