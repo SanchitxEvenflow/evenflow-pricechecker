@@ -9,6 +9,6 @@ export const ZEPTO_CITIES = [
 ];
 
 export const INSTAMART_CITIES = [
-  "Bangalore", "NCR", "Mumbai", "Hyderabad", "Kolkata", 
-  "Pune", "Ahmedabad", "Chennai"
+  "Bangalore - HSR", "Gurgaon", "Chennai", "Patna", "Lucknow", 
+  "Kochi", "Bangalore - Koramangala", "Ahmedabad", "Hyderabad"
 ];

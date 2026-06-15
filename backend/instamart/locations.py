@@ -4,14 +4,15 @@ Single source of truth for all geographic coordinates and pincodes required for 
 """
 
 LOCATIONS = [
-    {"name": "Bangalore", "lat": 12.912604, "lng": 77.652616, "pincode": "560102", "store_id": "1231052", "layoutId": ""},
-    {"name": "NCR", "lat": 28.417938, "lng": 77.056187, "pincode": "122018", "store_id": "1389633", "layoutId": ""},
-    {"name": "Mumbai", "lat": 19.193312, "lng": 72.839187, "pincode": "400064", "store_id": "1239162", "layoutId": ""},
-    {"name": "Hyderabad", "lat": 17.435313, "lng": 78.340688, "pincode": "500111", "store_id": "1387565", "layoutId": ""},
-    {"name": "Kolkata", "lat": 22.507562, "lng": 88.380813, "pincode": "700078", "store_id": "1403460", "layoutId": ""},
-    {"name": "Pune", "lat": 18.570437, "lng": 73.908812, "pincode": "411014", "store_id": "1389691", "layoutId": ""},
-    {"name": "Ahmedabad", "lat": 23.146687, "lng": 72.550562, "pincode": "382421", "store_id": "1388195", "layoutId": ""},
-    {"name": "Chennai", "lat": 12.857688, "lng": 80.232062, "pincode": "600119", "store_id": "1391892", "layoutId": ""},
+    {"name": "Bangalore - HSR", "area": "HSR", "lat": 12.912604, "lng": 77.652616, "pincode": "560102", "store_id": "1231052"},
+    {"name": "Gurgaon", "area": "DLF 4", "lat": 28.4641637, "lng": 77.0823482, "pincode": "122009", "store_id": "1239163"},
+    {"name": "Chennai", "area": "Anna Nagar", "lat": 13.084873, "lng": 80.210175, "pincode": "600040", "store_id": "1403023"},
+    {"name": "Patna", "area": "Phulwari", "lat": 25.621063, "lng": 85.073688, "pincode": "800001", "store_id": "1403365"},
+    {"name": "Lucknow", "area": "Gomti Nagar", "lat": 26.8524588, "lng": 81.0202533, "pincode": "226010", "store_id": "1404095"},
+    {"name": "Kochi", "area": "Kumbalangi", "lat": 9.8803553, "lng": 76.2768755, "pincode": "682007", "store_id": "1402451"},
+    {"name": "Bangalore - Koramangala", "area": "Koramangala", "lat": 12.9261382, "lng": 77.6221091, "pincode": "560034", "store_id": "1404944"},
+    {"name": "Ahmedabad", "area": "Adalaj", "lat": 23.146687, "lng": 72.550562, "pincode": "382421", "store_id": "1388195"},
+    {"name": "Hyderabad", "area": "Serilingampalle", "lat": 17.4358411, "lng": 78.3467857, "pincode": "500032", "store_id": "1387565"},
 ]
 
 # Dict keyed by city name for fast lookup
