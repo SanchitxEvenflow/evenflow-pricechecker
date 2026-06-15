@@ -241,6 +241,13 @@ def _detect_status(soup: BeautifulSoup, response_text: str, asin: str, page_url:
             if not has_price and not has_buy:
                 return "unavailable"
 
+    # data-asin on #dp is the authoritative ASIN Amazon is actually displaying.
+    # Catches redirects served at the same URL (e.g. after bot-check interstitial).
+    dp_el = soup.select_one("#dp") or soup.select_one("#dp-container")
+    if dp_el and dp_el.get("data-asin") and dp_el["data-asin"].upper() != asin.upper():
+        logger.info("data-asin redirect: requested=%s page_asin=%s", asin, dp_el["data-asin"])
+        return "redirected"
+
     canonical = soup.select_one('link[rel="canonical"]')
     if canonical and canonical.get("href"):
         canonical_href = canonical["href"]
@@ -249,11 +256,23 @@ def _detect_status(soup: BeautifulSoup, response_text: str, asin: str, page_url:
             # If the browser URL also changed to a different ASIN → genuine redirect
             url_match = re.search(r"/dp/([A-Z0-9]{10})", page_url, re.IGNORECASE)
             if url_match and url_match.group(1).upper() != asin.upper():
-                return "suppressed"
-            # Canonical mismatch but URL stayed on requested ASIN → variant canonical, safe to continue
+                return "redirected"
+            # Canonical mismatch but URL stayed on requested ASIN
             if not soup.select_one("#productTitle"):
                 return "suppressed"
+            # Check hidden ASIN input — if it matches the canonical (not requested), page is
+            # actually showing a different product, not just a variant with a parent canonical.
+            asin_input = soup.select_one("input#ASIN") or soup.select_one("input[name='ASIN']")
+            if asin_input and asin_input.get("value") and asin_input["value"].upper() != asin.upper():
+                logger.info("input#ASIN redirect: requested=%s page_asin=%s", asin, asin_input["value"])
+                return "redirected"
             logger.debug("Canonical ASIN mismatch for %s → %s but URL consistent, continuing", asin, match.group(1))
+
+    # URL-only redirect: browser landed on a different ASIN even without canonical mismatch
+    if page_url:
+        url_asin = re.search(r"/dp/([A-Z0-9]{10})", page_url, re.IGNORECASE)
+        if url_asin and url_asin.group(1).upper() != asin.upper():
+            return "redirected"
 
     title_el = soup.select_one("#productTitle")
     if not title_el:
@@ -490,7 +509,7 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
                 logger.warning("not_found after interstitial for ASIN %s — retrying with new proxy", asin)
                 continue
 
-            if status in ("unavailable", "suppressed", "not_found"):
+            if status in ("unavailable", "suppressed", "not_found", "redirected"):
                 proxy_manager.report_success(proxy)
                 return {**_empty, "status": status, "checked_at": datetime.now(IST).isoformat()}
 
