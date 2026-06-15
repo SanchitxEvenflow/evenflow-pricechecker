@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
-import { API } from "@/lib/api";
+import { useState, useEffect } from "react";
+import { API, authFetch } from "@/lib/api";
 import { csvEscape, downloadCsv } from "@/lib/csv";
 import { errorMessage } from "@/lib/errors";
 import { parseUniqueUppercaseTokens } from "@/lib/parsers";
 import type { RatingBreakdown, ScrapeResult } from "@/types/price-scraper";
+import { useCachedProducts } from "@/hooks/useCachedProducts";
 
 export function useAmazonManualScrape() {
   const [asinText, setAsinText] = useState("");
@@ -13,19 +14,28 @@ export function useAmazonManualScrape() {
   const [isScraping, setIsScraping] = useState(false);
   const [error, setError] = useState("");
   const [stats, setStats] = useState({ total: 0, processed: 0, remaining: 0, success: 0, failed: 0 });
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const { data: rawSheetProducts, loading: productsLoading } = useCachedProducts(`${API}/sheets/amazon/products`);
+  const sheetProducts = rawSheetProducts.filter((p, i, arr) => arr.findIndex(x => x.id === p.id) === i);
+
+  const toggleProduct = (id: string) =>
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
 
   const parseAsins = parseUniqueUppercaseTokens;
 
   const handleScrape = async () => {
-    const asins = parseAsins(asinText);
-    if (asins.length === 0) { setError("Please enter at least one ASIN"); return; }
+    const asins = [...new Set([...selectedIds, ...parseAsins(asinText)])];
+    if (asins.length === 0) { setError("Please enter or select at least one ASIN"); return; }
     setError("");
     setIsScraping(true);
-    setResults(asins.map(a => ({ asin: a, status: "pending" })));
+    setResults(asins.map(a => {
+      const p = sheetProducts.find(x => x.id === a);
+      return { asin: a, status: "pending", title: p?.title };
+    }));
     setStats({ total: asins.length, processed: 0, remaining: asins.length, success: 0, failed: 0 });
 
     try {
-      const res = await fetch(`${API}/api/amazon/scrape-manual`, {
+      const res = await authFetch(`${API}/api/amazon/scrape-manual`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ asins }),
       });
@@ -66,10 +76,11 @@ export function useAmazonManualScrape() {
     if (results.length === 0) return;
 
     const headers = [
-      "ASIN", "Status", "Price", "Rating", "Rating Count", "Rating Breakdown",
+      "ASIN", "Title", "Status", "Price", "Rating", "Rating Count", "Rating Breakdown",
       "Parent Node", "Parent Rank", "Child Node", "Child Rank", "URL"
     ];
 
+    const cleanNum = (v?: string | null) => v ? v.replace(/[₹,#]/g, "") : "";
     const rows = results.map(r => {
       const bd = r.rating_breakdown;
       const bdStr = bd
@@ -78,26 +89,25 @@ export function useAmazonManualScrape() {
             .filter(Boolean).join(" ")
         : "";
 
-      const row = [
-        r.asin,
-        r.status,
-        r.price || "",
-        r.rating ? `${r.rating} ★` : "",
-        r.rating_count || "",
-        bdStr,
-        r.parent_node || "",
-        r.rank_value ? `#${r.rank_value}` : "",
-        r.child_node || "",
-        r.sub_rank_value ? `#${r.sub_rank_value}` : "",
-        `https://www.amazon.in/dp/${r.asin}`
-      ];
-
-      return row.map(csvEscape).join(",");
+      return [
+        csvEscape(r.asin),
+        csvEscape(r.title || ""),
+        csvEscape(r.status),
+        cleanNum(r.price),
+        cleanNum(r.rating),
+        cleanNum(r.rating_count),
+        csvEscape(bdStr),
+        csvEscape(r.parent_node || ""),
+        cleanNum(r.rank_value),
+        csvEscape(r.child_node || ""),
+        cleanNum(r.sub_rank_value),
+        csvEscape(`https://www.amazon.in/dp/${r.asin}`),
+      ].join(",");
     });
 
     const csvContent = [headers.join(","), ...rows].join("\n");
     downloadCsv(csvContent, `manual_scrape_${new Date().toISOString().slice(0,10)}.csv`);
   };
 
-  return { asinText, setAsinText, results, isScraping, error, stats, parseAsins, handleScrape, downloadCSV };
+  return { asinText, setAsinText, results, isScraping, error, stats, parseAsins, handleScrape, downloadCSV, sheetProducts, productsLoading, selectedIds, toggleProduct };
 }

@@ -13,9 +13,9 @@ export function AmazonManualPage({ t, dark }: { t: ThemeClasses; dark: boolean }
   const asinCount = scrape.parseAsins(scrape.asinText).length;
 
   return (
-    <main className="max-w-6xl mx-auto px-6 py-8 space-y-8">
+    <main className="max-w-[95vw] mx-auto px-6 py-8 space-y-8">
       <ErrorBanner error={scrape.error} />
-      <AmazonInputCard t={t} asinText={scrape.asinText} setAsinText={scrape.setAsinText} isScraping={scrape.isScraping} asinCount={asinCount} onScrape={scrape.handleScrape} />
+      <AmazonInputCard t={t} asinText={scrape.asinText} setAsinText={scrape.setAsinText} isScraping={scrape.isScraping} asinCount={asinCount} onScrape={scrape.handleScrape} dark={dark} sheetProducts={scrape.sheetProducts} productsLoading={scrape.productsLoading} selectedIds={scrape.selectedIds} onToggleProduct={scrape.toggleProduct} />
       {scrape.stats.total > 0 && (
         <StatsGrid t={t} columnsClass="grid-cols-2 md:grid-cols-5" items={[
           { label: "Total", value: scrape.stats.total, color: "" },

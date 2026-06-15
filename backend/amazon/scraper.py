@@ -234,17 +234,45 @@ def _detect_status(soup: BeautifulSoup, response_text: str, asin: str, page_url:
     if availability_el:
         avail_text = availability_el.get_text(strip=True).lower()
         if "currently unavailable" in avail_text or "out of stock" in avail_text:
-            # Only mark unavailable if no price is visible — product may still be listed
+            # Only mark unavailable if no price AND no buy button — availability element
+            # can be stale/wrong for variant products; a buy button is the ground truth.
             has_price = any(soup.select_one(sel) for sel in PRICE_SELECTORS)
-            if not has_price:
+            has_buy = soup.select_one("#add-to-cart-button") or soup.select_one("#buy-now-button")
+            if not has_price and not has_buy:
                 return "unavailable"
+
+    # data-asin on #dp is the authoritative ASIN Amazon is actually displaying.
+    # Catches redirects served at the same URL (e.g. after bot-check interstitial).
+    dp_el = soup.select_one("#dp") or soup.select_one("#dp-container")
+    if dp_el and dp_el.get("data-asin") and dp_el["data-asin"].upper() != asin.upper():
+        logger.info("data-asin redirect: requested=%s page_asin=%s", asin, dp_el["data-asin"])
+        return "redirected"
 
     canonical = soup.select_one('link[rel="canonical"]')
     if canonical and canonical.get("href"):
         canonical_href = canonical["href"]
         match = re.search(r"/dp/([A-Z0-9]{10})", canonical_href, re.IGNORECASE)
         if match and match.group(1).upper() != asin.upper():
-            return "suppressed"
+            # If the browser URL also changed to a different ASIN → genuine redirect
+            url_match = re.search(r"/dp/([A-Z0-9]{10})", page_url, re.IGNORECASE)
+            if url_match and url_match.group(1).upper() != asin.upper():
+                return "redirected"
+            # Canonical mismatch but URL stayed on requested ASIN
+            if not soup.select_one("#productTitle"):
+                return "suppressed"
+            # Check hidden ASIN input — if it matches the canonical (not requested), page is
+            # actually showing a different product, not just a variant with a parent canonical.
+            asin_input = soup.select_one("input#ASIN") or soup.select_one("input[name='ASIN']")
+            if asin_input and asin_input.get("value") and asin_input["value"].upper() != asin.upper():
+                logger.info("input#ASIN redirect: requested=%s page_asin=%s", asin, asin_input["value"])
+                return "redirected"
+            logger.debug("Canonical ASIN mismatch for %s → %s but URL consistent, continuing", asin, match.group(1))
+
+    # URL-only redirect: browser landed on a different ASIN even without canonical mismatch
+    if page_url:
+        url_asin = re.search(r"/dp/([A-Z0-9]{10})", page_url, re.IGNORECASE)
+        if url_asin and url_asin.group(1).upper() != asin.upper():
+            return "redirected"
 
     title_el = soup.select_one("#productTitle")
     if not title_el:
@@ -289,13 +317,10 @@ async def _handle_interstitial(page) -> bool:
             except Exception:
                 continue
 
-        await page.wait_for_load_state("networkidle", timeout=15000)
-        # Wait for product title + ratings section
+        # Amazon never reaches networkidle (constant telemetry requests) — wait for
+        # the title directly; the ratings histogram comes from the curl supplement.
         try:
             await page.wait_for_selector("#productTitle", timeout=10000)
-            # Wait extra for ratings widget
-            await page.wait_for_selector("[data-hook*='ratings'], .cr-ratings-histogram, #acrCustomerReviewLink", 
-                                         timeout=8000)
         except Exception:
             pass
 
@@ -321,7 +346,18 @@ async def _save_debug(page, asin: str, attempt: int) -> None:
 
 
 
-def _fetch_curl_data_sync(asin: str) -> dict:
+async def _set_delivery_location(context, pincode: str) -> None:
+    await context.add_cookies([
+        {
+            "name": "i-see-az",
+            "value": f"pincode%3A{pincode}",
+            "domain": ".amazon.in",
+            "path": "/",
+        }
+    ])
+
+
+def _fetch_curl_data_sync(asin: str, cookies: dict = None) -> dict:
     """Single direct curl_cffi request to extract rating breakdown + BSR + category.
 
     Proxies return a bot-check page for curl traffic, so we go direct.
@@ -330,7 +366,7 @@ def _fetch_curl_data_sync(asin: str) -> dict:
     _empty_breakdown = {"5_star": None, "4_star": None, "3_star": None, "2_star": None, "1_star": None}
     _empty_rank = {"rank_raw": None, "rank_value": None, "rank_category": None, "sub_rank_value": None, "sub_rank_category": None}
     _empty_category = {"parent_node": None, "child_node": None, "category_path": None}
-    url = f"https://www.amazon.in/dp/{asin}"
+    url = f"https://www.amazon.in/dp/{asin}?th=1"
     try:
         resp = curl_requests.get(
             url,
@@ -341,6 +377,7 @@ def _fetch_curl_data_sync(asin: str) -> dict:
                 "Accept-Language": "en-IN,en;q=0.9",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             },
+            cookies=cookies or {},
         )
         if resp.status_code != 200:
             logger.warning("Curl data fetch: HTTP %d for ASIN %s", resp.status_code, asin)
@@ -357,18 +394,36 @@ def _fetch_curl_data_sync(asin: str) -> dict:
         return {**_empty_breakdown, **_empty_rank, **_empty_category}
 
 
-async def _fetch_curl_data(asin: str) -> dict:
-    return await asyncio.to_thread(_fetch_curl_data_sync, asin)
+async def _fetch_curl_data(asin: str, cookies: dict = None) -> dict:
+    return await asyncio.to_thread(_fetch_curl_data_sync, asin, cookies)
 
 
-async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager) -> dict:
+async def fetch_curl_supplement(asin: str, cookies: dict) -> dict:
+    """Run the curl supplemental fetch outside batch_context for better slot utilisation."""
+    return await _fetch_curl_data(asin, cookies=cookies)
+
+
+def merge_curl_supplement(result: dict, curl_data: dict) -> None:
+    """Merge curl supplement data into an existing scrape result in-place."""
+    if not curl_data:
+        return
+    breakdown = {k: curl_data.get(k) for k in ("5_star", "4_star", "3_star", "2_star", "1_star")}
+    if any(breakdown.values()):
+        result["rating_breakdown"] = breakdown
+    for field in ("rank_value", "rank_raw", "rank_category", "sub_rank_value", "sub_rank_category",
+                  "parent_node", "child_node", "category_path"):
+        if not result.get(field) and curl_data.get(field):
+            result[field] = curl_data[field]
+
+
+async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager, skip_curl: bool = False) -> dict:
     """
     Scrape Amazon.in product page for price data using a real Playwright browser context.
 
     Tries up to min(5, pool_size) proxies then falls back to a direct connection.
     Always returns a dict — never raises exceptions to the caller.
     """
-    url = f"https://www.amazon.in/dp/{asin}"
+    url = f"https://www.amazon.in/dp/{asin}?th=1"
 
     _empty = {
         "asin": asin, "price": "", "mrp": None, "rating": None, "rating_count": None,
@@ -385,10 +440,14 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
     for attempt in range(max_proxy_attempts + 1):  # +1 = direct-connection fallback
         proxy = None
         try:
-            delay = random.uniform(DELAY_MIN, DELAY_MAX)
-            logger.info("Amazon scrape attempt %d/%d for ASIN %s — waiting %.1fs",
-                        attempt + 1, max_proxy_attempts + 1, asin, delay)
-            await asyncio.sleep(delay)
+            if attempt > 0:
+                delay = random.uniform(DELAY_MIN, DELAY_MAX)
+                logger.info("Amazon scrape attempt %d/%d for ASIN %s — waiting %.1fs",
+                            attempt + 1, max_proxy_attempts + 1, asin, delay)
+                await asyncio.sleep(delay)
+            else:
+                logger.info("Amazon scrape attempt %d/%d for ASIN %s",
+                            attempt + 1, max_proxy_attempts + 1, asin)
 
             if attempt == max_proxy_attempts:
                 proxy = None
@@ -409,24 +468,25 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
             context = await browser.new_context(**context_opts)
             await context.add_init_script(STEALTH_SCRIPT)
             await context.route("**/*", _block_resources)
+            await _set_delivery_location(context, "560102")
             page = await context.new_page()
 
             logger.info("Navigating to %s via proxy=%s", url, proxy)
             await page.goto(url, wait_until="domcontentloaded", timeout=30000)
 
             logger.info("Page landed at: %s", page.url)
-            await _handle_interstitial(page)
+            interstitial_seen = await _handle_interstitial(page)
 
-            # Wait for product title to appear — handles deferred JS rendering
-            try:
-                await page.wait_for_selector("#productTitle", timeout=8000)
-            except Exception:
-                pass  # _detect_status will return not_found if still missing
-
+            # Only wait for title if we didn't already wait inside the interstitial handler
+            if not interstitial_seen:
+                try:
+                    await page.wait_for_selector("#productTitle", timeout=8000)
+                except Exception:
+                    pass  # _detect_status will return not_found if still missing
 
             html = await page.content()
-            body_text = await page.inner_text("body")
             soup = BeautifulSoup(html, "html.parser")
+            body_text = soup.get_text(" ", strip=True)
 
             if DEBUG_MODE:
                 await _save_debug(page, asin, attempt)
@@ -443,6 +503,12 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
                     continue
                 return {**_empty, "status": "blocked", "checked_at": datetime.now(IST).isoformat()}
 
+            if status == "not_found" and interstitial_seen and attempt < max_proxy_attempts:
+                # Title missing right after a bot-check click-through — the page likely
+                # never finished loading the real product. Retry, don't trust not_found.
+                logger.warning("not_found after interstitial for ASIN %s — retrying with new proxy", asin)
+                continue
+
             if status in ("unavailable", "suppressed", "not_found"):
                 proxy_manager.report_success(proxy)
                 return {**_empty, "status": status, "checked_at": datetime.now(IST).isoformat()}
@@ -451,35 +517,66 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
             mrp = _extract_text(soup, MRP_SELECTORS)
             rating = _extract_rating(soup)
             rating_count = _extract_rating_count(soup)
-            curl_data = await _fetch_curl_data(asin)
+
+            # Extract BSR + category from Playwright HTML (already loaded successfully)
+            bsr_data = _extract_best_seller_rank(soup)
+            category_data = _extract_category_hierarchy(soup)
+
+            # curl gets no-JS static HTML which has the ratings histogram; try it for breakdown
+            # and supplement any BSR/category fields still missing.
+            # When skip_curl=True the caller runs curl outside batch_context for better throughput.
+            playwright_cookies = await context.cookies()
+            cookie_dict = {c["name"]: c["value"] for c in playwright_cookies}
+
+            if not skip_curl:
+                curl_data = await _fetch_curl_data(asin, cookies=cookie_dict)
+            else:
+                curl_data = {}
+
+            breakdown = {k: curl_data.get(k) for k in ("5_star", "4_star", "3_star", "2_star", "1_star")}
+            if not any(breakdown.values()):
+                breakdown = _extract_rating_breakdown(soup)
+
+            rank_value = bsr_data["rank_value"] or curl_data.get("rank_value")
+            rank_raw = bsr_data["rank_raw"] or curl_data.get("rank_raw")
+            rank_category = bsr_data["rank_category"] or curl_data.get("rank_category")
+            sub_rank_value = bsr_data["sub_rank_value"] or curl_data.get("sub_rank_value")
+            sub_rank_category = bsr_data["sub_rank_category"] or curl_data.get("sub_rank_category")
+            parent_node = category_data["parent_node"] or curl_data.get("parent_node")
+            child_node = category_data["child_node"] or curl_data.get("child_node")
+            category_path = category_data["category_path"] or curl_data.get("category_path")
 
             buy_button = soup.select_one("#add-to-cart-button") or soup.select_one("#buy-now-button")
-            final_status = "available" if (price and buy_button) else "price_found"
+            final_status = status if status == "redirected" else ("available" if (price and buy_button) else "price_found")
 
             proxy_manager.report_success(proxy)
 
-            logger.info("Amazon scraped ASIN %s: price=%s, rating=%s, status=%s", asin, price, rating, final_status)
+            logger.info("Amazon scraped ASIN %s: price=%s, rating=%s, rank=%s, parent=%s, status=%s",
+                        asin, price, rating, rank_value, parent_node, final_status)
 
-            return {
+            result = {
                 "asin": asin,
                 "price": price or "",
                 "mrp": mrp,
                 "rating": rating,
                 "rating_count": rating_count,
-                "rating_breakdown": {k: curl_data[k] for k in ("5_star", "4_star", "3_star", "2_star", "1_star")},
-                "rank_raw": curl_data["rank_raw"],
-                "rank_value": curl_data["rank_value"],
-                "rank_category": curl_data["rank_category"],
-                "sub_rank_value": curl_data["sub_rank_value"],
-                "sub_rank_category": curl_data["sub_rank_category"],
-                "parent_node": curl_data["parent_node"],
-                "child_node": curl_data["child_node"],
-                "category_path": curl_data["category_path"],
+                "rating_breakdown": breakdown,
+                "rank_raw": rank_raw,
+                "rank_value": rank_value,
+                "rank_category": rank_category,
+                "sub_rank_value": sub_rank_value,
+                "sub_rank_category": sub_rank_category,
+                "parent_node": parent_node,
+                "child_node": child_node,
+                "category_path": category_path,
                 "status": final_status,
                 "platform": "amazon",
                 "url": url,
                 "checked_at": datetime.now(IST).isoformat(),
             }
+            if skip_curl:
+                result["_cookies"] = cookie_dict
+            return result
 
         except Exception as e:
             logger.exception("Amazon scrape error for ASIN %s (attempt %d): %s", asin, attempt + 1, str(e))

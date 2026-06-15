@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from flipkart.scraper import scrape_flipkart
 from schemas.price import FlipkartRequest, FlipkartResponse
 from utils.google_sheets import GoogleSheetsClient
-from utils.scrape_helpers import SCRAPE_CONCURRENCY
+from utils.scrape_helpers import batch_context, get_browser, sem_with_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -29,9 +29,9 @@ router = APIRouter(prefix="/price", tags=["Price"])
 async def check_flipkart_price(body: FlipkartRequest, request: Request):
     """Scrape Flipkart.in for product price by FSN."""
     proxy_manager = request.app.state.proxy_manager
-    browser = request.app.state.playwright_browser
 
-    result = await scrape_flipkart(body.fsn, browser, proxy_manager)
+    async with sem_with_timeout(request.app.state.total_sem):
+        result = await scrape_flipkart(body.fsn, get_browser(request.app.state), proxy_manager)
 
     return FlipkartResponse(
         fsn=result["fsn"],
@@ -59,10 +59,9 @@ class ManualFSNScrapeRequest(BaseModel):
 @manual_router.post("/scrape-manual")
 async def scrape_manual_flipkart(body: ManualFSNScrapeRequest, request: Request):
     """Scrape a list of FSNs manually. Results are streamed via SSE — no sheet writes."""
-    browser = request.app.state.playwright_browser
     proxy_manager = request.app.state.proxy_manager
 
-    if not browser:
+    if not request.app.state.playwright_ready:
         raise HTTPException(status_code=503, detail="Playwright browser not available")
 
     # Clean and deduplicate
@@ -79,12 +78,12 @@ async def scrape_manual_flipkart(body: ManualFSNScrapeRequest, request: Request)
         raise HTTPException(status_code=400, detail="No FSNs provided")
 
     total = len(clean_fsns)
-    sem = asyncio.Semaphore(SCRAPE_CONCURRENCY)
     queue: asyncio.Queue = asyncio.Queue()
+    app_state = request.app.state
 
     async def worker(fsn: str) -> None:
-        async with sem:
-            result = await scrape_flipkart(fsn, browser, proxy_manager)
+        async with batch_context(app_state):
+            result = await scrape_flipkart(fsn, get_browser(app_state), proxy_manager)
             await queue.put(result)
 
     async def event_stream():
@@ -184,8 +183,19 @@ async def trigger_manual_flipkart_scheduler(request: Request):
     if request.app.state.flipkart_cron_status.get("is_running"):
         raise HTTPException(status_code=409, detail="A Flipkart scrape run is already in progress")
     from scheduler import run_manual_flipkart_trigger
-    asyncio.create_task(run_manual_flipkart_trigger(request.app))
+    task = asyncio.create_task(run_manual_flipkart_trigger(request.app))
+    request.app.state.flipkart_cron_task = task
     return {"status": "started"}
+
+
+@sheets_router.post("/api/cancel-manual-scheduler")
+async def cancel_manual_flipkart_scheduler(request: Request):
+    """Cancel a running Flipkart manual scrape."""
+    task = request.app.state.flipkart_cron_task
+    if task and not task.done():
+        task.cancel()
+        return {"status": "cancelling"}
+    raise HTTPException(status_code=409, detail="No running Flipkart scrape to cancel")
 
 
 @sheets_router.get("/cron-status")

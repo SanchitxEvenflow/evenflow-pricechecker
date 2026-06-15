@@ -13,9 +13,9 @@ export function FlipkartManualPage({ t, dark }: { t: ThemeClasses; dark: boolean
   const fsnCount = scrape.parseFsns(scrape.fsnText).length;
 
   return (
-    <main className="max-w-6xl mx-auto px-6 py-8 space-y-8">
+    <main className="max-w-[95vw] mx-auto px-6 py-8 space-y-8">
       <ErrorBanner error={scrape.error} />
-      <FlipkartInputCard t={t} fsnText={scrape.fsnText} setFsnText={scrape.setFsnText} isScraping={scrape.isScraping} fsnCount={fsnCount} onScrape={scrape.handleScrape} />
+      <FlipkartInputCard t={t} fsnText={scrape.fsnText} setFsnText={scrape.setFsnText} isScraping={scrape.isScraping} fsnCount={fsnCount} onScrape={scrape.handleScrape} dark={dark} sheetProducts={scrape.sheetProducts} productsLoading={scrape.productsLoading} selectedIds={scrape.selectedIds} onToggleProduct={scrape.toggleProduct} />
       {scrape.stats.total > 0 && (
         <StatsGrid t={t} columnsClass="grid-cols-2 md:grid-cols-5" items={[
           { label: "Total", value: scrape.stats.total, color: "" },

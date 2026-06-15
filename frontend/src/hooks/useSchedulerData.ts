@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { API } from "@/lib/api";
+import { API, authFetch } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
 import type { CronStatus, LogEntry, SchedulerToast } from "@/types/price-scraper";
 
@@ -16,12 +16,17 @@ export function useSchedulerData() {
   const [isFlipkartTriggering, setIsFlipkartTriggering] = useState(false);
   const [isZeptoTriggering, setIsZeptoTriggering] = useState(false);
   const [isInstamartTriggering, setIsInstamartTriggering] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
+  const [isBlinkitCancelling, setIsBlinkitCancelling] = useState(false);
+  const [isFlipkartCancelling, setIsFlipkartCancelling] = useState(false);
+  const [isZeptoCancelling, setIsZeptoCancelling] = useState(false);
+  const [isInstamartCancelling, setIsInstamartCancelling] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [toast, setToast] = useState<SchedulerToast | null>(null);
 
   const fetchLogs = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/sheets/amazon/api/logs`);
+      const res = await authFetch(`${API}/sheets/amazon/api/logs`);
       const data = await res.json();
       if (data.logs) setLogs(data.logs);
     } catch {}
@@ -29,7 +34,7 @@ export function useSchedulerData() {
 
   const fetchAllStatus = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/cron-status/all`);
+      const res = await authFetch(`${API}/cron-status/all`);
       if (res.ok) {
         const data = await res.json();
         setCronStatus(data.amazon);
@@ -56,7 +61,7 @@ export function useSchedulerData() {
     setTriggering(true);
     setToast(null);
     try {
-      const res = await fetch(`${API}${endpoint}`, { method: "POST" });
+      const res = await authFetch(`${API}${endpoint}`, { method: "POST" });
       if (res.ok) {
         setToast({ type: "success", msg: successMsg });
         setTimeout(fetchLogs, 2000);
@@ -77,6 +82,34 @@ export function useSchedulerData() {
   const handleZeptoTrigger = makeTrigger("/price/zepto/api/trigger-manual-scheduler", setIsZeptoTriggering, "Zepto manual scrape triggered! Check progress below.");
   const handleInstamartTrigger = makeTrigger("/price/instamart/api/trigger-manual-scheduler", setIsInstamartTriggering, "Instamart manual scrape triggered! Check progress below.");
 
+  const makeCancel = (
+    endpoint: string,
+    setIsCancellingState: (val: boolean) => void
+  ) => async () => {
+    setIsCancellingState(true);
+    setToast(null);
+    try {
+      const res = await authFetch(`${API}${endpoint}`, { method: "POST" });
+      if (res.ok) {
+        setToast({ type: "success", msg: "Cancellation requested. Scrape will stop shortly." });
+        setTimeout(fetchAllStatus, 2000);
+      } else {
+        const data = await res.json();
+        setToast({ type: "error", msg: data.detail || "Failed to cancel scrape" });
+      }
+    } catch (e: unknown) {
+      setToast({ type: "error", msg: errorMessage(e) });
+    } finally {
+      setIsCancellingState(false);
+    }
+  };
+
+  const handleCancel = makeCancel("/sheets/amazon/api/cancel-manual-scheduler", setIsCancelling);
+  const handleBlinkitCancel = makeCancel("/price/blinkit/api/cancel-manual-scheduler", setIsBlinkitCancelling);
+  const handleFlipkartCancel = makeCancel("/sheets/flipkart/api/cancel-manual-scheduler", setIsFlipkartCancelling);
+  const handleZeptoCancel = makeCancel("/price/zepto/api/cancel-manual-scheduler", setIsZeptoCancelling);
+  const handleInstamartCancel = makeCancel("/price/instamart/api/cancel-manual-scheduler", setIsInstamartCancelling);
+
   return {
     cronStatus,
     blinkitStatus,
@@ -88,6 +121,11 @@ export function useSchedulerData() {
     isFlipkartTriggering,
     isZeptoTriggering,
     isInstamartTriggering,
+    isCancelling,
+    isBlinkitCancelling,
+    isFlipkartCancelling,
+    isZeptoCancelling,
+    isInstamartCancelling,
     logs,
     toast,
     setToast,
@@ -97,5 +135,10 @@ export function useSchedulerData() {
     handleFlipkartTrigger,
     handleZeptoTrigger,
     handleInstamartTrigger,
+    handleCancel,
+    handleBlinkitCancel,
+    handleFlipkartCancel,
+    handleZeptoCancel,
+    handleInstamartCancel,
   };
 }
