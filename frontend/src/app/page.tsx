@@ -1,5 +1,6 @@
 "use client";
 
+import { AuthGuard } from "@/components/auth/AuthGuard";
 import { AmazonManualPage } from "@/components/amazon/AmazonManualPage";
 import { AppShell } from "@/components/layout/AppShell";
 import { Header } from "@/components/layout/Header";
@@ -77,6 +78,7 @@ export default function App() {
   const { page } = useHashPage();
 
   return (
+    <AuthGuard>
     <AppShell dark={dark} t={t}>
       <Header dark={dark} setDark={setDark} page={page} />
       {page === "scheduler" ? (
@@ -84,14 +86,15 @@ export default function App() {
       ) : page === "flipkart" ? (
         <FlipkartManualPage t={t} dark={dark} />
       ) : page === "blinkit" ? (
-        <CityScrapePage t={t} dark={dark} config={blinkitConfig} />
+        <CityScrapePage key="blinkit" t={t} dark={dark} config={blinkitConfig} />
       ) : page === "zepto" ? (
-        <CityScrapePage t={t} dark={dark} config={zeptoConfig} />
+        <CityScrapePage key="zepto" t={t} dark={dark} config={zeptoConfig} />
       ) : page === "instamart" ? (
-        <CityScrapePage t={t} dark={dark} config={instamartConfig} />
+        <CityScrapePage key="instamart" t={t} dark={dark} config={instamartConfig} />
       ) : (
         <AmazonManualPage t={t} dark={dark} />
       )}
     </AppShell>
+    </AuthGuard>
   );
 }

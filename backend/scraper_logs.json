@@ -1,0 +1,112 @@
+[
+  {
+    "run_id": "930d59a1",
+    "type": "blinkit_manual",
+    "triggered_at": "2026-06-12T12:32:19.797058+05:30",
+    "completed_at": "2026-06-12T12:32:29.372115+05:30",
+    "total_asins": 120,
+    "success_count": 18,
+    "failed_count": 0,
+    "sheet_tab": "Blinkit_Manual_2026-06-12_12-32",
+    "status": "completed"
+  },
+  {
+    "run_id": "8f6856e7",
+    "type": "blinkit_manual",
+    "triggered_at": "2026-06-12T12:31:36.368964+05:30",
+    "completed_at": "2026-06-12T12:31:47.887455+05:30",
+    "total_asins": 120,
+    "success_count": 18,
+    "failed_count": 0,
+    "sheet_tab": "Blinkit_Manual_2026-06-12_12-31",
+    "status": "completed"
+  },
+  {
+    "run_id": "ea2593c0",
+    "type": "zepto_manual",
+    "triggered_at": "2026-06-12T12:21:51.294032+05:30",
+    "completed_at": "2026-06-12T12:21:54.927087+05:30",
+    "total_asins": 306,
+    "success_count": 6,
+    "failed_count": 0,
+    "sheet_tab": "Zepto_Manual_2026-06-12_12-21",
+    "status": "completed"
+  },
+  {
+    "run_id": "8f5aeef2",
+    "type": "instamart_manual",
+    "triggered_at": "2026-06-12T12:21:42.929492+05:30",
+    "completed_at": "2026-06-12T12:21:46.205700+05:30",
+    "total_asins": 136,
+    "success_count": 0,
+    "failed_count": 0,
+    "sheet_tab": "Instamart_Manual_2026-06-12_12-21",
+    "status": "completed"
+  },
+  {
+    "run_id": "27f632ca",
+    "type": "flipkart_manual",
+    "triggered_at": "2026-06-12T12:21:28.954397+05:30",
+    "completed_at": "2026-06-12T12:21:34.486277+05:30",
+    "total_asins": 580,
+    "success_count": 0,
+    "failed_count": 0,
+    "sheet_tab": "Flipkart_Manual_2026-06-12_12-21",
+    "status": "completed"
+  },
+  {
+    "run_id": "88cb029e",
+    "type": "blinkit_manual",
+    "triggered_at": "2026-06-12T12:21:09.596140+05:30",
+    "completed_at": "2026-06-12T12:21:14.594494+05:30",
+    "total_asins": 120,
+    "success_count": 0,
+    "failed_count": 0,
+    "sheet_tab": "Blinkit_Manual_2026-06-12_12-21",
+    "status": "completed"
+  },
+  {
+    "run_id": "477b543c",
+    "type": "manual",
+    "triggered_at": "2026-06-12T12:20:55.718368+05:30",
+    "completed_at": "2026-06-12T12:21:03.766741+05:30",
+    "total_asins": 726,
+    "success_count": 0,
+    "failed_count": 0,
+    "sheet_tab": "Manual_Trigger_2026-06-12_12-20",
+    "status": "completed"
+  },
+  {
+    "run_id": "5968f5a9",
+    "type": "automatic",
+    "triggered_at": "2026-06-12T11:10:01.491245+05:30",
+    "completed_at": "2026-06-12T11:27:28.846078+05:30",
+    "total_asins": 726,
+    "success_count": 711,
+    "failed_count": 15,
+    "sheet_tab": "Run_2026-06-12_11-10",
+    "status": "completed"
+  },
+  {
+    "run_id": "307144e4",
+    "type": "manual",
+    "triggered_at": "2026-06-11T16:36:43.550137+05:30",
+    "completed_at": "2026-06-11T16:51:56.305163+05:30",
+    "total_asins": 726,
+    "success_count": 715,
+    "failed_count": 11,
+    "sheet_tab": "Manual_Trigger_2026-06-11_16-36",
+    "status": "completed"
+  },
+  {
+    "run_id": "ff0f002b",
+    "type": "blinkit_manual",
+    "triggered_at": "2026-06-08T16:51:30.213473+05:30",
+    "completed_at": "2026-06-08T16:56:19.293357+05:30",
+    "total_asins": 140,
+    "success_count": 0,
+    "failed_count": 1400,
+    "sheet_tab": "Blinkit_Manual_2026-06-08_16-51",
+    "status": "completed"
+  }
+]

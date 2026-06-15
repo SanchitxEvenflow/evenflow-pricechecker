@@ -376,6 +376,23 @@ class GoogleSheetsClient:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.batch_update_flipkart_rows, spreadsheet_id, tab_name, updates)
 
+    def append_to_historical(self, spreadsheet_id: str, tab_name: str, rows: list[list]) -> None:
+        """Append rows to a historical tab — stacks below existing data."""
+        if not rows or not self.service:
+            return
+        self.service.spreadsheets().values().append(
+            spreadsheetId=spreadsheet_id,
+            range=f"{self._tab(tab_name)}!A1",
+            valueInputOption="USER_ENTERED",
+            insertDataOption="INSERT_ROWS",
+            body={"values": rows},
+        ).execute()
+
+    async def async_append_to_historical(self, spreadsheet_id: str, tab_name: str, rows: list[list]):
+        """Async wrapper for append_to_historical — runs in thread executor."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.append_to_historical, spreadsheet_id, tab_name, rows)
+
 
 def _col_letter(col_num: int) -> str:
     """Convert a 1-indexed column number to a Sheets column letter (1=A, 27=AA, etc.).

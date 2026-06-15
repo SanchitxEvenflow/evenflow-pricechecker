@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { API } from "@/lib/api";
+import { API, authFetch } from "@/lib/api";
 
 export type SheetConfig = Record<string, string | null>;
 
@@ -16,7 +16,7 @@ export function useSheetConfig() {
 
   useEffect(() => {
     if (_cache) return; // already fetched
-    fetch(`${API}/config`)
+    authFetch(`${API}/config`)
       .then(r => r.json())
       .then((data: { sheets: SheetConfig }) => {
         _cache = data.sheets;

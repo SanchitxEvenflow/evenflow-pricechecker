@@ -1,13 +1,65 @@
 """Shared scraping constants and helpers used by both routes/sheets.py and scheduler.py."""
 
+import asyncio
+import logging
 import os
+from contextlib import asynccontextmanager
+
+from fastapi import HTTPException
+
+logger = logging.getLogger(__name__)
 
 # Concurrency limit: tune based on available RAM (150MB per Playwright browser)
 # Default: 5 (safe for 2GB RAM). Raise to 10-15 if OOM doesn't occur, lower if it does.
 SCRAPE_CONCURRENCY = int(os.getenv("SCRAPE_CONCURRENCY", "5"))
+# Slots reserved for manual (single-product) requests even during batch runs.
+MANUAL_RESERVED = int(os.getenv("MANUAL_RESERVED", "2"))
+# Number of Chromium browser instances to launch at startup.
+BROWSER_POOL_SIZE = int(os.getenv("BROWSER_POOL_SIZE", "2"))
+# Seconds to wait for a semaphore slot before returning 503.
+SCRAPE_TIMEOUT = float(os.getenv("SCRAPE_TIMEOUT", "60"))
+
 SHEETS_BATCH_SIZE = 100  # Google Sheets API batch limit
 SHEET_HEADER_ROWS = 1  # Number of header rows in sheets
 CHUNK_SIZE = 50
+
+
+def get_browser(app_state):
+    """Round-robin browser from pool. itertools.cycle.next() is atomic in CPython."""
+    browser = next(app_state.browser_cycle)
+    logger.debug("Browser picked: %d", id(browser))
+    return browser
+
+
+@asynccontextmanager
+async def sem_with_timeout(sem: asyncio.Semaphore, timeout: float = SCRAPE_TIMEOUT):
+    """Acquire semaphore slot or raise HTTP 503 after timeout seconds."""
+    acquired = False
+    try:
+        await asyncio.wait_for(sem.acquire(), timeout=timeout)
+        acquired = True
+        yield
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=503,
+            detail="Service busy — too many concurrent scrapes. Retry shortly.",
+        )
+    finally:
+        if acquired:
+            sem.release()
+
+
+@asynccontextmanager
+async def batch_context(app_state):
+    """Acquire batch_throttle then total_sem for batch workers.
+
+    Guarantees batch slots ≤ (SCRAPE_CONCURRENCY - MANUAL_RESERVED) and
+    total Playwright contexts ≤ SCRAPE_CONCURRENCY at all times.
+    Order: batch_throttle first, then total_sem — consistent order prevents deadlock.
+    """
+    async with app_state.batch_throttle:
+        async with app_state.total_sem:
+            yield
 
 # Canonical city order — must match blinkit/locations.py LOCATIONS list
 BLINKIT_CITIES = [

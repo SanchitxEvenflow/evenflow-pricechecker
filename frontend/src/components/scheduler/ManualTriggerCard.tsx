@@ -56,13 +56,15 @@ function SheetsIcon() {
   );
 }
 
-export function ManualTriggerCard({ t, dark, brand, status, isTriggering, onTrigger }: {
+export function ManualTriggerCard({ t, dark, brand, status, isTriggering, onTrigger, onCancel, isCancelling }: {
   t: ThemeClasses;
   dark: boolean;
   brand: keyof typeof triggerConfig;
   status: CronStatus | null;
   isTriggering: boolean;
   onTrigger: () => void;
+  onCancel: () => void;
+  isCancelling: boolean;
 }) {
   const cfg = triggerConfig[brand];
   const sheets = useSheetConfig();
@@ -87,6 +89,15 @@ export function ManualTriggerCard({ t, dark, brand, status, isTriggering, onTrig
               <SheetsIcon />
               View Sheet
             </a>
+          )}
+          {status?.is_running && (
+            <button
+              onClick={onCancel}
+              disabled={isCancelling}
+              className="px-5 py-3 rounded-xl font-medium text-sm transition-all border border-red-500 text-red-500 hover:bg-red-50 dark:hover:bg-red-950 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            >
+              {isCancelling ? <><Spin /> Cancelling...</> : "Cancel"}
+            </button>
           )}
           <button
             onClick={onTrigger}

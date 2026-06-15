@@ -30,4 +30,5 @@ proxies.txt
 test_zepto.py
 backend/debug_flipkart/
 backend/artifacts/
-backend/scraper_logs.json
+backend/scraper_logs.jsongoogle_service_account.json
+backend/google_service_account.json

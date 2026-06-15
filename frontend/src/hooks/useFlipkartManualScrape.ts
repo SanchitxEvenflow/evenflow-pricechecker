@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
-import { API } from "@/lib/api";
+import { useState, useEffect } from "react";
+import { API, authFetch } from "@/lib/api";
 import { csvEscape, downloadCsv } from "@/lib/csv";
 import { errorMessage } from "@/lib/errors";
 import { parseUniqueTokens } from "@/lib/parsers";
 import type { FlipkartScrapeResult } from "@/types/price-scraper";
+import { useCachedProducts } from "@/hooks/useCachedProducts";
 
 export function useFlipkartManualScrape() {
   const [fsnText, setFsnText] = useState("");
@@ -13,19 +14,27 @@ export function useFlipkartManualScrape() {
   const [isScraping, setIsScraping] = useState(false);
   const [error, setError] = useState("");
   const [stats, setStats] = useState({ total: 0, processed: 0, remaining: 0, success: 0, failed: 0 });
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const { data: sheetProducts, loading: productsLoading } = useCachedProducts(`${API}/sheets/flipkart/products`);
+
+  const toggleProduct = (id: string) =>
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
 
   const parseFsns = parseUniqueTokens;
 
   const handleScrape = async () => {
-    const fsns = parseFsns(fsnText);
-    if (fsns.length === 0) { setError("Please enter at least one FSN"); return; }
+    const fsns = [...new Set([...selectedIds, ...parseFsns(fsnText)])];
+    if (fsns.length === 0) { setError("Please enter or select at least one FSN"); return; }
     setError("");
     setIsScraping(true);
-    setResults(fsns.map(f => ({ fsn: f, status: "pending" })));
+    setResults(fsns.map(f => {
+      const p = sheetProducts.find(x => x.id === f);
+      return { fsn: f, status: "pending", title: p?.title };
+    }));
     setStats({ total: fsns.length, processed: 0, remaining: fsns.length, success: 0, failed: 0 });
 
     try {
-      const res = await fetch(`${API}/api/flipkart/scrape-manual`, {
+      const res = await authFetch(`${API}/api/flipkart/scrape-manual`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ fsns }),
       });
@@ -63,14 +72,23 @@ export function useFlipkartManualScrape() {
 
   const downloadCSV = () => {
     if (results.length === 0) return;
-    const headers = ["FSN", "Status", "Price", "MRP", "Discount", "Rating", "Rating Count", "Fulfilled By", "URL"];
-    const rows = results.map(r => {
-      const row = [r.fsn, r.status, r.price || "", r.mrp || "", r.discount || "", r.rating || "", r.rating_count || "", r.fulfilled_by || "", r.url || ""];
-      return row.map(csvEscape).join(",");
-    });
+    const headers = ["FSN", "Title", "Status", "Price", "MRP", "Discount", "Rating", "Rating Count", "Fulfilled By", "URL"];
+    const cleanNum = (v?: string) => v ? v.replace(/[₹,]/g, "") : "";
+    const rows = results.map(r => [
+      csvEscape(r.fsn),
+      csvEscape(r.title || ""),
+      csvEscape(r.status),
+      cleanNum(r.price),
+      cleanNum(r.mrp),
+      csvEscape(r.discount || ""),
+      csvEscape(r.rating || ""),
+      csvEscape(r.rating_count || ""),
+      csvEscape(r.fulfilled_by || ""),
+      csvEscape(r.url || ""),
+    ].join(","));
     const csvContent = [headers.join(","), ...rows].join("\n");
     downloadCsv(csvContent, `flipkart_scrape_${new Date().toISOString().slice(0,10)}.csv`);
   };
 
-  return { fsnText, setFsnText, results, isScraping, error, stats, parseFsns, handleScrape, downloadCSV };
+  return { fsnText, setFsnText, results, isScraping, error, stats, parseFsns, handleScrape, downloadCSV, sheetProducts, productsLoading, selectedIds, toggleProduct };
 }

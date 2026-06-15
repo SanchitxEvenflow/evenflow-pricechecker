@@ -9,12 +9,12 @@ from fastapi.responses import StreamingResponse
 from instamart.locations import LOCATIONS, LOCATIONS_BY_CITY, CITY_NAMES
 from instamart.scraper import fetch_instamart_data
 from schemas.price import InstamartRequest, InstamartAllCitiesRequest, InstamartResponse
+from utils.google_sheets import GoogleSheetsClient
+from utils.scrape_helpers import batch_context, get_browser, sem_with_timeout
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["instamart"])
-
-INSTAMART_CONCURRENCY = 5  # instamart rate-limits aggressively
 
 
 # ── Single city lookup ──────────────────────────────────────────────────────
@@ -30,18 +30,17 @@ async def check_instamart_price(body: InstamartRequest, request: Request):
         )
 
     proxy_manager = request.app.state.proxy_manager
-    browser = request.app.state.playwright_browser
 
-    result = await fetch_instamart_data(
-        item_id=body.product_id,
-        pincode=city_data["pincode"],
-        lat=city_data["lat"],
-        lon=city_data["lng"],
-        city=body.city,
-        store_id=city_data["store_id"],
-        browser=browser,
-        proxy_manager=proxy_manager,
-    )
+    async with sem_with_timeout(request.app.state.total_sem):
+        result = await fetch_instamart_data(
+            item_id=body.product_id,
+            lat=city_data["lat"],
+            lon=city_data["lng"],
+            city=body.city,
+            store_id=city_data["store_id"],
+            browser=get_browser(request.app.state),
+            proxy_manager=proxy_manager,
+        )
 
     return InstamartResponse(**result)
 
@@ -55,9 +54,8 @@ async def check_instamart_all_cities(body: InstamartAllCitiesRequest, request: R
     Results are streamed as SSE events as they complete.
     """
     proxy_manager = request.app.state.proxy_manager
-    browser = request.app.state.playwright_browser
-    sem = asyncio.Semaphore(INSTAMART_CONCURRENCY)
     queue: asyncio.Queue = asyncio.Queue()
+    app_state = request.app.state
 
     # Build work items: (product_id, city_data)
     work_items = [
@@ -73,19 +71,17 @@ async def check_instamart_all_cities(body: InstamartAllCitiesRequest, request: R
         return StreamingResponse(empty_stream(), media_type="text/event-stream")
 
     async def worker(product_id: str, loc: dict) -> None:
-        async with sem:
+        async with batch_context(app_state):
             # If city name is duplicated (like Bangalore), append the area to make it unique for the frontend
             is_duplicate = sum(1 for l in LOCATIONS if l["name"] == loc["name"]) > 1
             display_city = f"{loc['name']} - {loc['area']}" if is_duplicate else loc["name"]
-
             result = await fetch_instamart_data(
                 item_id=product_id,
-                pincode=loc["pincode"],
                 lat=loc["lat"],
                 lon=loc["lng"],
                 city=display_city,
                 store_id=loc["store_id"],
-                browser=browser,
+                browser=get_browser(app_state),
                 proxy_manager=proxy_manager,
             )
             await queue.put(result)
@@ -122,8 +118,19 @@ async def trigger_manual_instamart(request: Request):
     if request.app.state.instamart_cron_status.get("is_running"):
         raise HTTPException(status_code=409, detail="An instamart scrape run is already in progress")
     from scheduler import run_manual_instamart_trigger
-    asyncio.create_task(run_manual_instamart_trigger(request.app))
+    task = asyncio.create_task(run_manual_instamart_trigger(request.app))
+    request.app.state.instamart_cron_task = task
     return {"status": "started"}
+
+
+@router.post("/instamart/api/cancel-manual-scheduler")
+async def cancel_manual_instamart(request: Request):
+    """Cancel a running Instamart manual scrape."""
+    task = request.app.state.instamart_cron_task
+    if task and not task.done():
+        task.cancel()
+        return {"status": "cancelling"}
+    raise HTTPException(status_code=409, detail="No running Instamart scrape to cancel")
 
 
 @router.get("/instamart/cron-status")

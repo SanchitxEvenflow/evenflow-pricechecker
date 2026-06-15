@@ -10,3 +10,4 @@ pydantic>=2.0
 google-api-python-client
 google-auth
 apscheduler>=3.10,<4.0
+PyJWT>=2.8

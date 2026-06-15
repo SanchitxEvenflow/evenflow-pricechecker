@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { API } from "@/lib/api";
+import { API, authFetch } from "@/lib/api";
 import { csvEscape } from "@/lib/csv";
 import { errorMessage } from "@/lib/errors";
 import { parseUniqueTokens } from "@/lib/parsers";
 import type { SheetProduct } from "@/components/shared/ProductPicker";
 import type { CityResult, CityScrapeConfig } from "@/types/price-scraper";
+import { useCachedProducts } from "@/hooks/useCachedProducts";
 
 export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>) {
   const [idText, setIdText] = useState("");
@@ -14,18 +15,8 @@ export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>)
   const [isScraping, setIsScraping] = useState(false);
   const [error, setError] = useState("");
   const [stats, setStats] = useState({ total: 0, done: 0, success: 0, failed: 0 });
-  const [sheetProducts, setSheetProducts] = useState<SheetProduct[]>([]);
-  const [productsLoading, setProductsLoading] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-
-  useEffect(() => {
-    setProductsLoading(true);
-    fetch(`${API}/price/${config.brand}/products`)
-      .then(r => r.ok ? r.json() : [])
-      .then(data => setSheetProducts(Array.isArray(data) ? data : []))
-      .catch(() => {})
-      .finally(() => setProductsLoading(false));
-  }, [config.brand]);
+  const { data: sheetProducts, loading: productsLoading } = useCachedProducts(`${API}/price/${config.brand}/products`);
 
   const toggleProduct = (id: string) =>
     setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
@@ -47,7 +38,7 @@ export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>)
     setStats({ total: ids.length * config.cities.length, done: 0, success: 0, failed: 0 });
 
     try {
-      const res = await fetch(`${API}${config.endpoint}`, {
+      const res = await authFetch(`${API}${config.endpoint}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ product_ids: ids }),
       });
@@ -96,14 +87,19 @@ export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>)
   const downloadCSV = () => {
     const pids = Object.keys(results);
     if (!pids.length) return;
-    const hdr = ["Product ID", ...config.cities.flatMap(c => [`${c} Price`, `${c} MRP`, `${c} Status`])];
+    const hdr = ["Product ID", "Title", ...config.cities.flatMap(c => [`${c} Price`, `${c} MRP`, `${c} Status`])];
     const rows = pids.map(pid => {
-      const cells = [pid];
+      const title = sheetProducts?.find(x => x.id === pid)?.title || Object.values(results[pid])[0]?.title || "";
+      const cells: string[] = [csvEscape(pid), csvEscape(title)];
       config.cities.forEach(c => {
         const r = results[pid]?.[c];
-        cells.push(r?.price != null ? String(r.price) : "", r?.mrp != null ? String(r.mrp) : "", r?.status || "");
+        cells.push(
+          r?.price != null ? String(r.price) : "",
+          r?.mrp != null ? String(r.mrp) : "",
+          csvEscape(r?.status || ""),
+        );
       });
-      return cells.map(csvEscape).join(",");
+      return cells.join(",");
     });
     const blob = new Blob([[hdr.join(","), ...rows].join("\n")], { type: "text/csv" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob);

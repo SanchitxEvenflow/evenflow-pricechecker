@@ -1,10 +1,11 @@
 import type { CityResult, CityScrapeConfig, ThemeClasses } from "@/types/price-scraper";
 
-export function CityResultsMatrix<T extends CityResult>({ t, results, config, onDownloadCSV }: {
+export function CityResultsMatrix<T extends CityResult>({ t, results, config, onDownloadCSV, sheetProducts = [] }: {
   t: ThemeClasses;
   results: Record<string, Record<string, T>>;
   config: CityScrapeConfig<T>;
   onDownloadCSV: () => void;
+  sheetProducts?: import("@/components/shared/ProductPicker").SheetProduct[];
 }) {
   const pids = Object.keys(results);
   if (pids.length === 0) return null;
@@ -23,15 +24,19 @@ export function CityResultsMatrix<T extends CityResult>({ t, results, config, on
           <thead>
             <tr className={`border-b ${t.border} ${t.thead}`}>
               <th className={`px-4 py-4 text-xs font-semibold ${t.muted} uppercase tracking-wider sticky left-0 ${t.card} z-10`}>Product ID</th>
+              <th className={`px-4 py-4 text-xs font-semibold ${t.muted} uppercase tracking-wider sticky left-[120px] ${t.card} z-10`}>Title</th>
               {config.cities.map(c => (
                 <th key={c} className={`px-4 py-4 text-xs font-semibold ${t.muted} uppercase tracking-wider text-center`}>{c}</th>
               ))}
             </tr>
           </thead>
           <tbody className={`divide-y ${t.border}`}>
-            {pids.map(pid => (
+            {pids.map(pid => {
+              const title = sheetProducts?.find(x => x.id === pid)?.title || Object.values(results[pid])[0]?.title || "—";
+              return (
               <tr key={pid} className="transition-colors">
                 <td className={`px-4 py-3 whitespace-nowrap text-sm font-medium font-mono sticky left-0 ${t.card} z-10`}>{pid}</td>
+                <td className={`px-4 py-3 whitespace-nowrap text-sm truncate max-w-[200px] sticky left-[120px] ${t.card} z-10`} title={title}>{title}</td>
                 {config.cities.map(city => {
                   const r = results[pid]?.[city];
                   if (!r) return <td key={city} className={`px-4 py-3 text-center text-xs ${t.muted}`}>—</td>;
@@ -47,7 +52,8 @@ export function CityResultsMatrix<T extends CityResult>({ t, results, config, on
                   );
                 })}
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>

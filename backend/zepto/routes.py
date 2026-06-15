@@ -130,8 +130,19 @@ async def trigger_manual_zepto(request: Request):
     if request.app.state.zepto_cron_status.get("is_running"):
         raise HTTPException(status_code=409, detail="A Zepto scrape run is already in progress")
     from scheduler import run_manual_zepto_trigger
-    asyncio.create_task(run_manual_zepto_trigger(request.app))
+    task = asyncio.create_task(run_manual_zepto_trigger(request.app))
+    request.app.state.zepto_cron_task = task
     return {"status": "started"}
+
+
+@router.post("/zepto/api/cancel-manual-scheduler")
+async def cancel_manual_zepto(request: Request):
+    """Cancel a running Zepto manual scrape."""
+    task = request.app.state.zepto_cron_task
+    if task and not task.done():
+        task.cancel()
+        return {"status": "cancelling"}
+    raise HTTPException(status_code=409, detail="No running Zepto scrape to cancel")
 
 
 @router.get("/zepto/cron-status")
