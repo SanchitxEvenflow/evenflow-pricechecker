@@ -509,7 +509,7 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
                 logger.warning("not_found after interstitial for ASIN %s — retrying with new proxy", asin)
                 continue
 
-            if status in ("unavailable", "suppressed", "not_found", "redirected"):
+            if status in ("unavailable", "suppressed", "not_found"):
                 proxy_manager.report_success(proxy)
                 return {**_empty, "status": status, "checked_at": datetime.now(IST).isoformat()}
 
@@ -547,7 +547,7 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
             category_path = category_data["category_path"] or curl_data.get("category_path")
 
             buy_button = soup.select_one("#add-to-cart-button") or soup.select_one("#buy-now-button")
-            final_status = "available" if (price and buy_button) else "price_found"
+            final_status = status if status == "redirected" else ("available" if (price and buy_button) else "price_found")
 
             proxy_manager.report_success(proxy)
 
