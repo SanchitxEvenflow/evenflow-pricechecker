@@ -29,18 +29,25 @@ async def check_instamart_price(body: InstamartRequest, request: Request):
             detail=f"Invalid city '{body.city}'. Valid cities: {CITY_NAMES}",
         )
 
-    proxy_manager = request.app.state.proxy_manager
-
-    async with sem_with_timeout(request.app.state.total_sem):
-        result = await fetch_instamart_data(
-            item_id=body.product_id,
-            lat=city_data["lat"],
-            lon=city_data["lng"],
-            city=body.city,
-            store_id=city_data["store_id"],
-            browser=get_browser(request.app.state),
-            proxy_manager=proxy_manager,
-        )
+    cache = getattr(request.app.state, "cache", None)
+    cache_key = f"instamart_{body.product_id}_{body.city}"
+    
+    if cache is not None and cache_key in cache:
+        result = cache[cache_key]
+    else:
+        proxy_manager = request.app.state.proxy_manager
+        async with sem_with_timeout(request.app.state.total_sem):
+            result = await fetch_instamart_data(
+                item_id=body.product_id,
+                lat=city_data["lat"],
+                lon=city_data["lng"],
+                city=body.city,
+                store_id=city_data["store_id"],
+                browser=get_browser(request.app.state),
+                proxy_manager=proxy_manager,
+            )
+        if cache is not None and result.get("status") not in ("error", "invalid_format"):
+            cache[cache_key] = result
 
     return InstamartResponse(**result)
 
@@ -70,11 +77,17 @@ async def check_instamart_all_cities(body: InstamartAllCitiesRequest, request: R
             yield f"data: {json.dumps({'done': True, 'total': 0})}\n\n"
         return StreamingResponse(empty_stream(), media_type="text/event-stream")
 
-    async def worker(product_id: str, loc: dict) -> None:
+    async def worker(product_id: str, loc: dict, target_variant_name: str | None = None) -> dict:
+        is_duplicate = sum(1 for l in LOCATIONS if l["name"] == loc["name"]) > 1
+        display_city = f"{loc['name']} - {loc['area']}" if is_duplicate else loc["name"]
+        
+        cache = getattr(request.app.state, "cache", None)
+        cache_key = f"instamart_{product_id}_{display_city}"
+        
+        if cache is not None and cache_key in cache:
+            return cache[cache_key].copy()
+
         async with batch_context(app_state):
-            # If city name is duplicated (like Bangalore), append the area to make it unique for the frontend
-            is_duplicate = sum(1 for l in LOCATIONS if l["name"] == loc["name"]) > 1
-            display_city = f"{loc['name']} - {loc['area']}" if is_duplicate else loc["name"]
             result = await fetch_instamart_data(
                 item_id=product_id,
                 lat=loc["lat"],
@@ -83,29 +96,45 @@ async def check_instamart_all_cities(body: InstamartAllCitiesRequest, request: R
                 store_id=loc["store_id"],
                 browser=get_browser(app_state),
                 proxy_manager=proxy_manager,
+                target_variant_name=target_variant_name,
             )
-            await queue.put(result)
+            
+            if cache is not None and result.get("status") not in ("error", "invalid_format"):
+                cache[cache_key] = result.copy()
+                
+            return result
 
     async def event_stream():
-        tasks = [asyncio.create_task(worker(pid, loc)) for pid, loc in work_items]
         done = 0
-        try:
-            while done < total:
-                result = await queue.get()
-                done += 1
-                payload = json.dumps({
-                    **result,
-                    "progress": done,
-                    "total": total,
-                })
-                yield f"data: {payload}\n\n"
+        
+        # 1. First-city pre-check: Scrape LOCATIONS[0] for all PIDs concurrently
+        precheck_tasks = []
+        for pid in body.product_ids:
+            if LOCATIONS:
+                precheck_tasks.append(asyncio.create_task(worker(pid.strip(), LOCATIONS[0])))
+                
+        # Wait for all prechecks and yield them
+        target_variants = {}
+        for coro in asyncio.as_completed(precheck_tasks):
+            result = await coro
+            target_variants[result['product_id']] = result.get('title')
+            done += 1
+            yield f"data: {json.dumps({**result, 'progress': done, 'total': total})}\n\n"
 
-            await asyncio.gather(*tasks, return_exceptions=True)
-            yield f"data: {json.dumps({'done': True, 'total': total})}\n\n"
-        finally:
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+        # 2. Scrape remaining cities
+        remaining_tasks = []
+        for pid in body.product_ids:
+            clean_pid = pid.strip()
+            target_variant = target_variants.get(clean_pid)
+            for loc in LOCATIONS[1:]:
+                remaining_tasks.append(asyncio.create_task(worker(clean_pid, loc, target_variant)))
+
+        for coro in asyncio.as_completed(remaining_tasks):
+            result = await coro
+            done += 1
+            yield f"data: {json.dumps({**result, 'progress': done, 'total': total})}\n\n"
+
+        yield f"data: {json.dumps({'done': True, 'total': total})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 

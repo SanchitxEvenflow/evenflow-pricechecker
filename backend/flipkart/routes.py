@@ -28,10 +28,18 @@ router = APIRouter(prefix="/price", tags=["Price"])
 @router.post("/flipkart", response_model=FlipkartResponse)
 async def check_flipkart_price(body: FlipkartRequest, request: Request):
     """Scrape Flipkart.in for product price by FSN."""
-    proxy_manager = request.app.state.proxy_manager
+    cache = getattr(request.app.state, "cache", None)
+    cache_key = f"flipkart_{body.fsn}"
 
-    async with sem_with_timeout(request.app.state.total_sem):
-        result = await scrape_flipkart(body.fsn, get_browser(request.app.state), proxy_manager)
+    if cache is not None and cache_key in cache:
+        result = cache[cache_key]
+    else:
+        proxy_manager = request.app.state.proxy_manager
+        async with sem_with_timeout(request.app.state.total_sem):
+            result = await scrape_flipkart(body.fsn, get_browser(request.app.state), proxy_manager)
+            
+        if cache is not None and result.get("status") not in ("error", "invalid_format"):
+            cache[cache_key] = result
 
     return FlipkartResponse(
         fsn=result["fsn"],
@@ -82,9 +90,19 @@ async def scrape_manual_flipkart(body: ManualFSNScrapeRequest, request: Request)
     app_state = request.app.state
 
     async def worker(fsn: str) -> None:
-        async with batch_context(app_state):
-            result = await scrape_flipkart(fsn, get_browser(app_state), proxy_manager)
-            await queue.put(result)
+        cache = getattr(app_state, "cache", None)
+        cache_key = f"flipkart_{fsn}"
+        
+        if cache is not None and cache_key in cache:
+            result = cache[cache_key].copy()
+        else:
+            async with batch_context(app_state):
+                result = await scrape_flipkart(fsn, get_browser(app_state), proxy_manager)
+                
+            if cache is not None and result.get("status") not in ("error", "invalid_format"):
+                cache[cache_key] = result.copy()
+                
+        await queue.put(result)
 
     async def event_stream():
         tasks = [asyncio.create_task(worker(f)) for f in clean_fsns]

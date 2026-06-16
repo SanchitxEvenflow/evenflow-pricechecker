@@ -288,18 +288,35 @@ async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str) -> None:
     pid_pending: dict[str, int] = {pid: len(BLINKIT_LOCATIONS) for pid in pids}
     pid_index: dict[str, int] = {pid: i for i, pid in enumerate(pids)}
 
-    all_tasks = [
-        asyncio.create_task(scrape_one_city(pid, loc))
-        for pid in pids
-        for loc in BLINKIT_LOCATIONS
-    ]
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def process_pid(pid: str):
+        if not BLINKIT_LOCATIONS:
+            return
+            
+        _, result1 = await scrape_one_city(pid, BLINKIT_LOCATIONS[0])
+        await queue.put((pid, result1))
+        
+        remaining_tasks = [
+             asyncio.create_task(scrape_one_city(pid, loc))
+             for loc in BLINKIT_LOCATIONS[1:]
+        ]
+        for coro in asyncio.as_completed(remaining_tasks):
+             _, result = await coro
+             await queue.put((pid, result))
+
+    pid_tasks = [asyncio.create_task(process_pid(pid)) for pid in pids]
+
+    total_expected_tasks = len(pids) * len(BLINKIT_LOCATIONS)
+    tasks_done = 0
 
     try:
-        for coro in asyncio.as_completed(all_tasks):
+        while tasks_done < total_expected_tasks:
             try:
-                pid, result = await coro
+                pid, result = await queue.get()
+                tasks_done += 1
             except Exception:
-                logger.exception("Blinkit: unexpected task error")
+                logger.exception("Blinkit: unexpected queue error")
                 continue
 
             city = result.get("city", "")
@@ -336,7 +353,7 @@ async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str) -> None:
                         logger.exception("Blinkit: failed to write batch")
                         batch_updates = []
     finally:
-        for t in all_tasks:
+        for t in pid_tasks:
             if not t.done():
                 t.cancel()
         try:
@@ -425,7 +442,7 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str) -> None:
     sem = asyncio.Semaphore(int(os.getenv("ZEPTO_CONCURRENCY", "10")))
     loop = asyncio.get_running_loop()
 
-    async def scrape_one_city(pid: str, loc: dict) -> tuple[str, dict]:
+    async def scrape_one_city(pid: str, loc: dict, fallback_title: str | None = None, fallback_mrp: float | None = None) -> tuple[str, dict]:
         async with sem:
             try:
                 result = await loop.run_in_executor(
@@ -439,6 +456,8 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str) -> None:
                         city=loc["name"],
                         store_id=loc["store_id"],
                         proxy_manager=proxy_manager,
+                        fallback_title=fallback_title,
+                        fallback_mrp=fallback_mrp,
                     ),
                 )
             except Exception:
@@ -456,18 +475,40 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str) -> None:
     pid_pending: dict[str, int] = {pid: len(ZEPTO_LOCATIONS) for pid in pids}
     pid_index: dict[str, int] = {pid: i for i, pid in enumerate(pids)}
 
-    all_tasks = [
-        asyncio.create_task(scrape_one_city(pid, loc))
-        for pid in pids
-        for loc in ZEPTO_LOCATIONS
-    ]
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def process_pid(pid: str):
+        if not ZEPTO_LOCATIONS:
+            return
+            
+        _, result1 = await scrape_one_city(pid, ZEPTO_LOCATIONS[0])
+        await queue.put((pid, result1))
+        
+        fallback_title = result1.get("title")
+        fallback_mrp = result1.get("mrp")
+        if fallback_title == "Not Found" or fallback_title == "Unknown Product":
+             fallback_title = None
+             
+        remaining_tasks = [
+             asyncio.create_task(scrape_one_city(pid, loc, fallback_title, fallback_mrp))
+             for loc in ZEPTO_LOCATIONS[1:]
+        ]
+        for coro in asyncio.as_completed(remaining_tasks):
+             _, result = await coro
+             await queue.put((pid, result))
+
+    pid_tasks = [asyncio.create_task(process_pid(pid)) for pid in pids]
+
+    total_expected_tasks = len(pids) * len(ZEPTO_LOCATIONS)
+    tasks_done = 0
 
     try:
-        for coro in asyncio.as_completed(all_tasks):
+        while tasks_done < total_expected_tasks:
             try:
-                pid, result = await coro
+                pid, result = await queue.get()
+                tasks_done += 1
             except Exception:
-                logger.exception("Zepto: unexpected task error")
+                logger.exception("Zepto: unexpected queue error")
                 continue
 
             city = result.get("city", "")
@@ -504,7 +545,7 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str) -> None:
                         logger.exception("Zepto: failed to write batch")
                         batch_updates = []
     finally:
-        for t in all_tasks:
+        for t in pid_tasks:
             if not t.done():
                 t.cancel()
         try:
@@ -609,7 +650,7 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str) -> Non
     batch_updates = []
     BATCH_SIZE = 100  # Google Sheets API batch limit
 
-    async def scrape_one_city(pid_: str, loc: dict) -> tuple[str, dict]:
+    async def scrape_one_city(pid_: str, loc: dict, target_variant_name: str | None = None) -> tuple[str, dict]:
         async with batch_context(app.state):
             try:
                 result = await fetch_instamart_data(
@@ -620,6 +661,7 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str) -> Non
                     store_id=loc.get("store_id", ""),
                     browser=get_browser(app.state),
                     proxy_manager=proxy_manager,
+                    target_variant_name=target_variant_name,
                 )
             except Exception:
                 result = {"city": loc["name"], "status": "error"}
@@ -630,18 +672,37 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str) -> Non
     pid_pending: dict[str, int] = {pid: len(INSTAMART_LOCATIONS) for pid in pids}
     pid_index: dict[str, int] = {pid: i for i, pid in enumerate(pids)}
 
-    all_tasks = [
-        asyncio.create_task(scrape_one_city(pid, loc))
-        for pid in pids
-        for loc in INSTAMART_LOCATIONS
-    ]
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def process_pid(pid: str):
+        if not INSTAMART_LOCATIONS:
+            return
+            
+        _, result1 = await scrape_one_city(pid, INSTAMART_LOCATIONS[0])
+        await queue.put((pid, result1))
+        
+        target_variant_name = result1.get("title")
+        
+        remaining_tasks = [
+             asyncio.create_task(scrape_one_city(pid, loc, target_variant_name))
+             for loc in INSTAMART_LOCATIONS[1:]
+        ]
+        for coro in asyncio.as_completed(remaining_tasks):
+             _, result = await coro
+             await queue.put((pid, result))
+
+    pid_tasks = [asyncio.create_task(process_pid(pid)) for pid in pids]
+
+    total_expected_tasks = len(pids) * len(INSTAMART_LOCATIONS)
+    tasks_done = 0
 
     try:
-        for coro in asyncio.as_completed(all_tasks):
+        while tasks_done < total_expected_tasks:
             try:
-                pid, result = await coro
+                pid, result = await queue.get()
+                tasks_done += 1
             except Exception:
-                logger.exception("Instamart: unexpected task error")
+                logger.exception("Instamart: unexpected queue error")
                 continue
 
             city = result.get("city", "")
@@ -680,7 +741,7 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str) -> Non
                         logger.exception("Instamart: failed to write batch")
                         batch_updates = []
     finally:
-        for t in all_tasks:
+        for t in pid_tasks:
             if not t.done():
                 t.cancel()
         try:

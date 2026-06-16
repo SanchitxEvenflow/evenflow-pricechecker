@@ -140,6 +140,8 @@ def fetch_zepto_data(
     city: str,
     store_id: str,
     proxy_manager: ProxyManager | None = None,
+    fallback_title: str | None = None,
+    fallback_mrp: float | None = None,
 ) -> dict:
     """
     Fetch product data from Zepto's PDP endpoint.
@@ -267,6 +269,23 @@ def fetch_zepto_data(
 
             # If the product isn't found in the local store, try with fallback to get the price
             if json_data.get("code") == 5 or not json_data.get("pageLayout"):
+                if fallback_title is not None:
+                    # We already know the title and mrp from a previous city scrape!
+                    print(f"[Zepto] {city}: not in local store, using provided fallback_title...")
+                    if proxy_manager and proxy:
+                        proxy_manager.report_success(proxy)
+                    return {
+                        "product_id": item_id,
+                        "city": city,
+                        "title": fallback_title,
+                        "price": None,
+                        "mrp": fallback_mrp,
+                        "status": "out_of_stock",
+                        "is_sold_out": True,
+                        "url": product_url,
+                        "checked_at": now,
+                    }
+
                 print(f"[Zepto] {city}: not in local store, retrying with fallback...")
                 fallback_url = f"{base_url}&fallback_enabled=True"
                 response = session.get(fallback_url, headers=headers, timeout=15)

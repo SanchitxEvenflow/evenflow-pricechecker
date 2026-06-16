@@ -25,8 +25,10 @@ CHUNK_SIZE = 50
 
 
 def get_browser(app_state):
-    """Round-robin browser from pool. itertools.cycle.next() is atomic in CPython."""
-    browser = next(app_state.browser_cycle)
+    """Round-robin browser from pool via BrowserPoolManager."""
+    browser = app_state.browser_manager.get_browser()
+    if not browser:
+        raise RuntimeError("No browsers available in pool")
     logger.debug("Browser picked: %d", id(browser))
     return browser
 

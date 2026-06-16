@@ -29,14 +29,22 @@ price_router = APIRouter(prefix="/price", tags=["Price"])
 @price_router.post("/amazon", response_model=AmazonResponse)
 async def check_amazon_price(body: AmazonRequest, request: Request):
     """Scrape Amazon.in for product price by ASIN."""
-    proxy_manager = request.app.state.proxy_manager
-
-    async with sem_with_timeout(request.app.state.total_sem):
-        result = await scrape_amazon(body.asin, get_browser(request.app.state), proxy_manager, skip_curl=True)
-    cookies = result.pop("_cookies", {}) or {}
-    if cookies:
-        curl_data = await fetch_curl_supplement(body.asin, cookies)
-        merge_curl_supplement(result, curl_data)
+    cache = getattr(request.app.state, "cache", None)
+    cache_key = f"amazon_{body.asin}"
+    
+    if cache is not None and cache_key in cache:
+        result = cache[cache_key]
+    else:
+        proxy_manager = request.app.state.proxy_manager
+        async with sem_with_timeout(request.app.state.total_sem):
+            result = await scrape_amazon(body.asin, get_browser(request.app.state), proxy_manager, skip_curl=True)
+        cookies = result.pop("_cookies", {}) or {}
+        if cookies:
+            curl_data = await fetch_curl_supplement(body.asin, cookies)
+            merge_curl_supplement(result, curl_data)
+        
+        if cache is not None and result.get("status") not in ("error", "invalid_format"):
+            cache[cache_key] = result
 
     return AmazonResponse(
         asin=result["asin"],
@@ -380,15 +388,25 @@ async def scrape_manual(body: ManualScrapeRequest, request: Request):
         })
 
     async def worker(asin: str) -> None:
-        async with batch_context(app_state):
-            result = await scrape_amazon(asin, get_browser(app_state), proxy_manager, skip_curl=True)
-        try:
-            cookies = result.pop("_cookies", {}) or {}
-            if cookies:
-                curl_data = await fetch_curl_supplement(asin, cookies)
-                merge_curl_supplement(result, curl_data)
-        except Exception:
-            logger.exception("scrape_manual: curl supplement failed for ASIN %s", asin)
+        cache = getattr(app_state, "cache", None)
+        cache_key = f"amazon_{asin}"
+        
+        if cache is not None and cache_key in cache:
+            result = cache[cache_key].copy()
+        else:
+            async with batch_context(app_state):
+                result = await scrape_amazon(asin, get_browser(app_state), proxy_manager, skip_curl=True)
+            try:
+                cookies = result.pop("_cookies", {}) or {}
+                if cookies:
+                    curl_data = await fetch_curl_supplement(asin, cookies)
+                    merge_curl_supplement(result, curl_data)
+            except Exception:
+                logger.exception("scrape_manual: curl supplement failed for ASIN %s", asin)
+            
+            if cache is not None and result.get("status") not in ("error", "invalid_format"):
+                cache[cache_key] = result.copy()
+                
         await queue.put(result)
 
     async def event_stream():

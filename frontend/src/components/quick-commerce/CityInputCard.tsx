@@ -4,6 +4,7 @@ import type { Dispatch, SetStateAction } from "react";
 import { ProductPicker, type SheetProduct } from "@/components/shared/ProductPicker";
 import { Spin } from "@/components/shared/Spin";
 import { useSheetConfig } from "@/hooks/useSheetConfig";
+import { parseUniqueTokens } from "@/lib/parsers";
 import type { CityResult, CityScrapeConfig, ThemeClasses } from "@/types/price-scraper";
 
 
@@ -34,6 +35,10 @@ export function CityInputCard<T extends CityResult>({ t, dark, text, setText, is
   const cityCount = config.cities.length;
   const totalIds = selectedIds.length + parsedCount;
 
+  // Re-parse to get the exact currently pasted IDs for preview
+  const parsedIds = parseUniqueTokens(text);
+  const newIds = parsedIds.filter((id: string) => !sheetProducts?.find(p => p.id === id));
+
   return (
     <div className={`${t.card} border ${t.border} rounded-2xl p-8 shadow-sm`}>
       <div className="flex items-start justify-between mb-4 gap-4">
@@ -53,6 +58,7 @@ export function CityInputCard<T extends CityResult>({ t, dark, text, setText, is
         loading={productsLoading} accentFocus={config.focusRingClass} t={t} dark={dark} />
       <textarea value={text} onChange={e => setText(e.target.value)} placeholder={config.placeholder} rows={4}
         className={`w-full rounded-xl px-4 py-3 text-sm font-mono border focus:outline-none focus:ring-2 ${config.focusRingClass} resize-y ${t.input}`} disabled={isScraping} />
+
       <div className="flex items-center justify-between mt-4">
         <p className={`text-xs ${t.muted}`}>
           {selectedIds.length > 0

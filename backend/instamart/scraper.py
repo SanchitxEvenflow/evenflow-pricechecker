@@ -82,6 +82,7 @@ async def fetch_instamart_data(
     store_id: str,
     browser: Browser,
     proxy_manager: ProxyManager | None = None,
+    target_variant_name: str | None = None,
 ) -> dict:
     """
     Fetch product data from Instamart (Swiggy) using the shared Playwright browser.
@@ -286,7 +287,23 @@ async def fetch_instamart_data(
             title = v.get("displayName", "Unknown Product")
 
             if v.get("variations"):
-                v = v["variations"][0]
+                variations = v["variations"]
+                
+                def _get_price(var):
+                    p = var.get("price", {})
+                    val = p.get("offerPrice", {}).get("units") or p.get("mrp", {}).get("units") or float("inf")
+                    return float(val)
+
+                variations.sort(key=_get_price)
+                
+                selected_var = variations[0]
+                if target_variant_name:
+                    for var in variations:
+                        if var.get("displayName") == target_variant_name:
+                            selected_var = var
+                            break
+                            
+                v = selected_var
                 title = v.get("displayName", title)
 
             price_obj = v.get("price", {})

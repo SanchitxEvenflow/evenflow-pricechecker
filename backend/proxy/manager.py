@@ -72,29 +72,50 @@ class ProxyManager:
 
         logger.info("Loaded %d proxies from '%s'", len(self.active_pool), proxy_file)
 
-    def _revive_dead_proxies(self) -> None:
-        """Move dead proxies back to active if cooldown (600s) has passed. Must be called under lock."""
-        now = time.time()
-        revived: list[str] = []
-        for proxy, died_at in list(self.dead_pool.items()):
-            if now - died_at > 600:
-                revived.append(proxy)
-
-        for proxy in revived:
-            del self.dead_pool[proxy]
-            self.failure_count[proxy] = 0
-            self.active_pool.append(proxy)
-            logger.info("Revived proxy after cooldown: %s", proxy)
+    async def resurrect_loop(self) -> None:
+        """Background task to actively test dead proxies and resurrect them if they connect successfully."""
+        import aiohttp
+        import asyncio
+        
+        while True:
+            await asyncio.sleep(300)  # Every 5 minutes
+            
+            with self._lock:
+                dead_proxies = list(self.dead_pool.keys())
+                
+            if not dead_proxies:
+                continue
+                
+            logger.info("ProxyManager: Testing %d dead proxies for resurrection...", len(dead_proxies))
+            
+            async def test_proxy(proxy_url):
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get("http://httpbin.org/ip", proxy=proxy_url, timeout=10) as resp:
+                            if resp.status == 200:
+                                return proxy_url, True
+                except Exception:
+                    pass
+                return proxy_url, False
+                
+            results = await asyncio.gather(*(test_proxy(p) for p in dead_proxies))
+            
+            revived = []
+            with self._lock:
+                for proxy, success in results:
+                    if success and proxy in self.dead_pool:
+                        del self.dead_pool[proxy]
+                        self.failure_count[proxy] = 0
+                        if proxy not in self.active_pool:
+                            self.active_pool.append(proxy)
+                        revived.append(proxy)
+                        
+            if revived:
+                logger.info("ProxyManager: Successfully resurrected %d proxies!", len(revived))
 
     def get_proxy(self) -> str | None:
         """Return next proxy via round-robin, or None if pool is empty."""
         with self._lock:
-            # Only check for revival every 30 seconds (not on every call)
-            now = time.time()
-            if now - self._last_revive_check > self._revive_check_interval:
-                self._revive_dead_proxies()
-                self._last_revive_check = now
-
             if not self.active_pool:
                 logger.warning("Proxy pool is empty — caller should make direct request")
                 return None
