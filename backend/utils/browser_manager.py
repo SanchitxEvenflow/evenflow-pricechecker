@@ -44,18 +44,18 @@ class BrowserPoolManager:
         return b
 
     async def _recycle(self, idx: int, old_b):
-        async with self._lock:
-            try:
+        try:
+            async with self._lock:
                 new_b = await self.playwright.chromium.launch(headless=self.headless, args=self.args)
                 self.browsers[idx] = new_b
                 logger.info("BrowserPool: Successfully launched replacement browser for index %d", idx)
-                
-                # Wait 30 seconds to let existing contexts on the old browser gracefully finish
-                await asyncio.sleep(30)
-                await old_b.close()
-                logger.info("BrowserPool: Closed old browser for index %d", idx)
-            except Exception as e:
-                logger.error("BrowserPool: Failed to recycle browser %d: %s", idx, e)
+
+            # Sleep OUTSIDE the lock — new browser already in pool; just delay old close
+            await asyncio.sleep(30)
+            await old_b.close()
+            logger.info("BrowserPool: Closed old browser for index %d", idx)
+        except Exception as e:
+            logger.error("BrowserPool: Failed to recycle browser %d: %s", idx, e)
 
     async def close_all(self):
         for b in self.browsers:

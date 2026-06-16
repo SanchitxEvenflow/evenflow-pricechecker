@@ -90,31 +90,35 @@ async def check_zepto_all_cities(body: ZeptoAllCitiesRequest, request: Request):
     async def worker(product_id: str, loc: dict, fallback_title: str | None = None, fallback_mrp: float | None = None) -> dict:
         cache = getattr(request.app.state, "cache", None)
         cache_key = f"zepto_{product_id}_{loc['name']}"
-        
+
         if cache is not None and cache_key in cache:
             return cache[cache_key].copy()
 
         async with sem:
             loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(
-                request.app.state.thread_pool,
-                partial(
-                    fetch_zepto_data,
-                    item_id=product_id,
-                    pincode=loc["pincode"],
-                    lat=loc["lat"],
-                    lon=loc["lng"],
-                    city=loc["name"],
-                    store_id=loc["store_id"],
-                    proxy_manager=proxy_manager,
-                    fallback_title=fallback_title,
-                    fallback_mrp=fallback_mrp,
-                ),
-            )
-            
+            try:
+                result = await loop.run_in_executor(
+                    request.app.state.thread_pool,
+                    partial(
+                        fetch_zepto_data,
+                        item_id=product_id,
+                        pincode=loc["pincode"],
+                        lat=loc["lat"],
+                        lon=loc["lng"],
+                        city=loc["name"],
+                        store_id=loc["store_id"],
+                        proxy_manager=proxy_manager,
+                        fallback_title=fallback_title,
+                        fallback_mrp=fallback_mrp,
+                    ),
+                )
+            except Exception:
+                logger.exception("zepto worker error for %s %s", product_id, loc["name"])
+                return {"product_id": product_id, "city": loc["name"], "status": "error"}
+
             if cache is not None and result.get("status") not in ("error", "invalid_format"):
                 cache[cache_key] = result.copy()
-                
+
             return result
 
     async def event_stream():

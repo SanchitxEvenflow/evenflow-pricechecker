@@ -290,14 +290,19 @@ def fetch_zepto_data(
                 fallback_url = f"{base_url}&fallback_enabled=True"
                 response = session.get(fallback_url, headers=headers, timeout=15)
                 json_data = response.json()
-                
+
+                if json_data.get("code") == 5 or not json_data.get("pageLayout"):
+                    print(f"[Zepto] {city}: fallback also returned no product data")
+                    if proxy_manager and proxy:
+                        proxy_manager.report_success(proxy)
+                    return _error_result("not_in_any_store")
+
                 # Mark as out of stock since we had to fallback
-                if "pageLayout" in json_data:
-                    try:
-                        sp = json_data["pageLayout"]["pageData"]["productInfo"]["storeProduct"]
-                        sp["outOfStock"] = True
-                    except KeyError:
-                        pass
+                try:
+                    sp = json_data["pageLayout"]["pageData"]["productInfo"]["storeProduct"]
+                    sp["outOfStock"] = True
+                except KeyError:
+                    pass
 
             # Extract product data
             product = _extract_zepto_product(json_data)

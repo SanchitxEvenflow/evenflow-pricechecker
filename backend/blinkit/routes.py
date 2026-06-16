@@ -86,31 +86,35 @@ async def check_blinkit_all_cities(body: BlinkitAllCitiesRequest, request: Reque
             yield f"data: {json.dumps({'done': True, 'total': 0})}\n\n"
         return StreamingResponse(empty_stream(), media_type="text/event-stream")
 
-    async def worker(product_id: str, loc: dict) -> None:
+    async def worker(product_id: str, loc: dict) -> dict:
         cache = getattr(request.app.state, "cache", None)
         cache_key = f"blinkit_{product_id}_{loc['name']}"
-        
+
         if cache is not None and cache_key in cache:
             return cache[cache_key].copy()
 
         async with sem:
             loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(
-                request.app.state.thread_pool,
-                partial(
-                    fetch_blinkit_data,
-                    item_id=product_id,
-                    pincode=loc["pincode"],
-                    lat=loc["lat"],
-                    lon=loc["lng"],
-                    city=loc["name"],
-                    proxy_manager=proxy_manager,
-                ),
-            )
-            
+            try:
+                result = await loop.run_in_executor(
+                    request.app.state.thread_pool,
+                    partial(
+                        fetch_blinkit_data,
+                        item_id=product_id,
+                        pincode=loc["pincode"],
+                        lat=loc["lat"],
+                        lon=loc["lng"],
+                        city=loc["name"],
+                        proxy_manager=proxy_manager,
+                    ),
+                )
+            except Exception:
+                logger.exception("blinkit worker error for %s %s", product_id, loc["name"])
+                return {"product_id": product_id, "city": loc["name"], "status": "error"}
+
             if cache is not None and result.get("status") not in ("error", "invalid_format"):
                 cache[cache_key] = result.copy()
-                
+
             return result
 
     async def event_stream():
