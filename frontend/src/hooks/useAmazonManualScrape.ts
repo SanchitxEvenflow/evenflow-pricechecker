@@ -1,10 +1,12 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { API, authFetch } from "@/lib/api";
+import { API } from "@/lib/api";
+import { getToken, clearAuth } from "@/lib/auth";
 import { csvEscape, downloadCsv } from "@/lib/csv";
 import { errorMessage } from "@/lib/errors";
 import { parseUniqueUppercaseTokens } from "@/lib/parsers";
+import { fetchEventSource } from "@microsoft/fetch-event-source";
 import type { RatingBreakdown, ScrapeResult } from "@/types/price-scraper";
 import { useCachedProducts } from "@/hooks/useCachedProducts";
 
@@ -35,36 +37,38 @@ export function useAmazonManualScrape() {
     setStats({ total: asins.length, processed: 0, remaining: asins.length, success: 0, failed: 0 });
 
     try {
-      const res = await authFetch(`${API}/api/amazon/scrape-manual`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ asins }),
-      });
-      if (!res.ok) throw new Error(`Server returned ${res.status}: ${res.statusText}`);
-      const reader = res.body?.getReader();
-      if (!reader) throw new Error("No response stream");
-      const decoder = new TextDecoder();
-      let buffer = "";
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      const token = getToken();
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+
       let suc = 0, fail = 0;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
+      await fetchEventSource(`${API}/api/amazon/scrape-manual`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ asins }),
+        onmessage(ev) {
+          try {
+            const data = JSON.parse(ev.data);
+            if (data.done) return;
 
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const data = JSON.parse(line.slice(6));
-          if (data.done) continue;
+            const st = data.status || "error";
+            if (["error", "not_found", "blocked", "invalid_format"].includes(st)) fail++; else suc++;
 
-          const st = data.status || "error";
-          if (["error", "not_found", "blocked", "invalid_format"].includes(st)) fail++; else suc++;
-
-          setResults(prev => prev.map(r => r.asin === data.asin ? { ...r, ...data, status: st } : r));
-          setStats({ total: asins.length, processed: suc + fail, remaining: asins.length - suc - fail, success: suc, failed: fail });
+            setResults(prev => prev.map(r => r.asin === data.asin ? { ...r, ...data, status: st } : r));
+            setStats({ total: asins.length, processed: suc + fail, remaining: asins.length - suc - fail, success: suc, failed: fail });
+          } catch (e) {
+            // Ignore malformed chunks
+          }
+        },
+        onerror(err) {
+          if (err?.status === 401) {
+            clearAuth();
+            window.location.href = "/login";
+          }
+          throw err;
         }
-      }
+      });
     } catch (e: unknown) {
       setError("Scrape failed: " + errorMessage(e));
     } finally {

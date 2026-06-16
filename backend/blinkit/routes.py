@@ -33,19 +33,27 @@ async def check_blinkit_price(body: BlinkitRequest, request: Request):
 
     proxy_manager = request.app.state.proxy_manager
 
-    loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(
-        request.app.state.thread_pool,
-        partial(
-            fetch_blinkit_data,
-            item_id=body.product_id,
-            pincode=city_data["pincode"],
-            lat=city_data["lat"],
-            lon=city_data["lng"],
-            city=body.city,
-            proxy_manager=proxy_manager,
-        ),
-    )
+    cache = getattr(request.app.state, "cache", None)
+    cache_key = f"blinkit_{body.product_id}_{body.city}"
+    
+    if cache is not None and cache_key in cache:
+        result = cache[cache_key]
+    else:
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            request.app.state.thread_pool,
+            partial(
+                fetch_blinkit_data,
+                item_id=body.product_id,
+                pincode=city_data["pincode"],
+                lat=city_data["lat"],
+                lon=city_data["lng"],
+                city=body.city,
+                proxy_manager=proxy_manager,
+            ),
+        )
+        if cache is not None and result.get("status") not in ("error", "invalid_format"):
+            cache[cache_key] = result
 
     return BlinkitResponse(**result)
 
@@ -79,6 +87,12 @@ async def check_blinkit_all_cities(body: BlinkitAllCitiesRequest, request: Reque
         return StreamingResponse(empty_stream(), media_type="text/event-stream")
 
     async def worker(product_id: str, loc: dict) -> None:
+        cache = getattr(request.app.state, "cache", None)
+        cache_key = f"blinkit_{product_id}_{loc['name']}"
+        
+        if cache is not None and cache_key in cache:
+            return cache[cache_key].copy()
+
         async with sem:
             loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(
@@ -93,24 +107,38 @@ async def check_blinkit_all_cities(body: BlinkitAllCitiesRequest, request: Reque
                     proxy_manager=proxy_manager,
                 ),
             )
-            await queue.put(result)
+            
+            if cache is not None and result.get("status") not in ("error", "invalid_format"):
+                cache[cache_key] = result.copy()
+                
+            return result
 
     async def event_stream():
-        tasks = [asyncio.create_task(worker(pid, loc)) for pid, loc in work_items]
         done = 0
-
-        while done < total:
-            result = await queue.get()
+        
+        # 1. First-city pre-check: Scrape LOCATIONS[0] for all PIDs concurrently
+        precheck_tasks = []
+        for pid in body.product_ids:
+            if LOCATIONS:
+                precheck_tasks.append(asyncio.create_task(worker(pid.strip(), LOCATIONS[0])))
+                
+        # Wait for all prechecks to finish and yield them
+        for coro in asyncio.as_completed(precheck_tasks):
+            result = await coro
             done += 1
-            payload = json.dumps({
-                **result,
-                "progress": done,
-                "total": total,
-            })
-            yield f"data: {payload}\n\n"
+            yield f"data: {json.dumps({**result, 'progress': done, 'total': total})}\n\n"
 
-        # Ensure all tasks are finished
-        await asyncio.gather(*tasks, return_exceptions=True)
+        # 2. Scrape remaining cities for all PIDs
+        remaining_tasks = []
+        for pid in body.product_ids:
+            for loc in LOCATIONS[1:]:
+                remaining_tasks.append(asyncio.create_task(worker(pid.strip(), loc)))
+                
+        for coro in asyncio.as_completed(remaining_tasks):
+            result = await coro
+            done += 1
+            yield f"data: {json.dumps({**result, 'progress': done, 'total': total})}\n\n"
+
         yield f"data: {json.dumps({'done': True, 'total': total})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

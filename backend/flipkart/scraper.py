@@ -46,6 +46,29 @@ Object.defineProperty(navigator, 'languages', { get: () => ['en-IN', 'en-US', 'e
 window.chrome = { runtime: {} };
 """
 
+_BLOCKED_RESOURCE_TYPES = {"image", "media", "font", "stylesheet"}
+_BLOCKED_DOMAINS = {
+    "google-analytics.com",
+    "doubleclick.net",
+    "googletagmanager.com",
+    "pixel.facebook.com",
+    "bat.bing.com",
+    "assets.flipkart.com",
+}
+
+async def _block_resources(route) -> None:
+    url = route.request.url.lower()
+    if route.request.resource_type in _BLOCKED_RESOURCE_TYPES:
+        await route.abort()
+        return
+        
+    for domain in _BLOCKED_DOMAINS:
+        if domain in url:
+            await route.abort()
+            return
+            
+    await route.continue_()
+
 # ── In-memory URL cache with size limit ─────────────────────────────────────
 _resolved_url_cache: dict[str, str] = {}
 _CACHE_MAX_SIZE = 10000  # Prevents unbounded memory growth (~50MB at max)
@@ -79,7 +102,7 @@ def _cache_url(fsn: str, resolved_url: str) -> None:
 # ── JavaScript extraction snippets ──────────────────────────────────────────
 
 # This JS runs in the browser and returns all extractable product data at once
-JS_EXTRACT_ALL = """
+JS_EXTRACT_ALL = r"""
 () => {
     const result = { price: null, mrp: null, discount: null, rating: null, rating_count: null, fulfilled_by: null };
 
@@ -302,6 +325,7 @@ async def scrape_flipkart(fsn: str, browser: Browser, proxy_manager: ProxyManage
             context = await browser.new_context(**context_opts)
             await context.add_init_script(STEALTH_SCRIPT)
             page = await context.new_page()
+            await page.route("**/*", _block_resources)
 
             # ── STEP A: Navigate & resolve URL ──────────────────────────
             logger.info("Step A: Navigating to %s", start_url)

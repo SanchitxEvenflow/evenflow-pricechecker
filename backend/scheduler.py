@@ -314,8 +314,15 @@ async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str) -> None:
 
         async def scrape_pid(pid: str) -> tuple[str, dict]:
             """Scrape all cities for one PID, returning aggregated city results."""
-            city_tasks = [asyncio.create_task(scrape_one_city(pid, loc)) for loc in BLINKIT_LOCATIONS]
             city_results: dict[str, dict] = {}
+            if not BLINKIT_LOCATIONS:
+                return (pid, city_results)
+                
+            first_loc = BLINKIT_LOCATIONS[0]
+            _, result1 = await scrape_one_city(pid, first_loc)
+            city_results[first_loc["name"]] = result1
+            
+            city_tasks = [asyncio.create_task(scrape_one_city(pid, loc)) for loc in BLINKIT_LOCATIONS[1:]]
             try:
                 for coro in asyncio.as_completed(city_tasks):
                     try:
@@ -497,7 +504,7 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str) -> None:
         sem = asyncio.Semaphore(int(os.getenv("ZEPTO_CONCURRENCY", "10")))
         loop = asyncio.get_running_loop()
 
-        async def scrape_one_city(pid: str, loc: dict) -> tuple[str, dict]:
+        async def scrape_one_city(pid: str, loc: dict, fallback_title: str | None = None, fallback_mrp: float | None = None) -> tuple[str, dict]:
             async with sem:
                 try:
                     result = await loop.run_in_executor(
@@ -511,6 +518,8 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str) -> None:
                             city=loc["name"],
                             store_id=loc["store_id"],
                             proxy_manager=proxy_manager,
+                            fallback_title=fallback_title,
+                            fallback_mrp=fallback_mrp,
                         ),
                     )
                 except Exception:
@@ -519,8 +528,20 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str) -> None:
 
         async def scrape_pid(pid: str) -> tuple[str, dict]:
             """Scrape all cities for one PID, returning aggregated city results."""
-            city_tasks = [asyncio.create_task(scrape_one_city(pid, loc)) for loc in ZEPTO_LOCATIONS]
             city_results: dict[str, dict] = {}
+            if not ZEPTO_LOCATIONS:
+                return (pid, city_results)
+                
+            first_loc = ZEPTO_LOCATIONS[0]
+            _, result1 = await scrape_one_city(pid, first_loc)
+            city_results[first_loc["name"]] = result1
+            
+            fallback_title = result1.get("title")
+            fallback_mrp = result1.get("mrp")
+            if fallback_title in ("Not Found", "Unknown Product"):
+                 fallback_title = None
+                 
+            city_tasks = [asyncio.create_task(scrape_one_city(pid, loc, fallback_title, fallback_mrp)) for loc in ZEPTO_LOCATIONS[1:]]
             try:
                 for coro in asyncio.as_completed(city_tasks):
                     try:
@@ -715,7 +736,7 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str) -> Non
         batch_updates = []
         BATCH_SIZE = 100  # Google Sheets API batch limit
 
-        async def scrape_one_city(pid_: str, loc: dict) -> tuple[str, dict]:
+        async def scrape_one_city(pid_: str, loc: dict, target_variant_name: str | None = None) -> tuple[str, dict]:
             async with batch_context(app.state):
                 try:
                     result = await fetch_instamart_data(
@@ -726,6 +747,7 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str) -> Non
                         store_id=loc.get("store_id", ""),
                         browser=get_browser(app.state),
                         proxy_manager=proxy_manager,
+                        target_variant_name=target_variant_name,
                     )
                 except Exception:
                     result = {"city": loc["name"], "status": "error"}
@@ -733,8 +755,17 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str) -> Non
 
         async def scrape_pid(pid: str) -> tuple[str, dict]:
             """Scrape all cities for one PID, returning aggregated city results."""
-            city_tasks = [asyncio.create_task(scrape_one_city(pid, loc)) for loc in INSTAMART_LOCATIONS]
             city_results: dict[str, dict] = {}
+            if not INSTAMART_LOCATIONS:
+                return (pid, city_results)
+                
+            first_loc = INSTAMART_LOCATIONS[0]
+            _, result1 = await scrape_one_city(pid, first_loc)
+            city_results[first_loc["name"]] = result1
+            
+            target_variant_name = result1.get("title")
+            
+            city_tasks = [asyncio.create_task(scrape_one_city(pid, loc, target_variant_name)) for loc in INSTAMART_LOCATIONS[1:]]
             try:
                 for coro in asyncio.as_completed(city_tasks):
                     try:

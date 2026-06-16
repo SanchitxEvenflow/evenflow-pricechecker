@@ -33,20 +33,28 @@ async def check_zepto_price(body: ZeptoRequest, request: Request):
 
     proxy_manager = request.app.state.proxy_manager
 
-    loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(
-        request.app.state.thread_pool,
-        partial(
-            fetch_zepto_data,
-            item_id=body.product_id,
-            pincode=city_data["pincode"],
-            lat=city_data["lat"],
-            lon=city_data["lng"],
-            city=body.city,
-            store_id=city_data["store_id"],
-            proxy_manager=proxy_manager,
-        ),
-    )
+    cache = getattr(request.app.state, "cache", None)
+    cache_key = f"zepto_{body.product_id}_{body.city}"
+    
+    if cache is not None and cache_key in cache:
+        result = cache[cache_key]
+    else:
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            request.app.state.thread_pool,
+            partial(
+                fetch_zepto_data,
+                item_id=body.product_id,
+                pincode=city_data["pincode"],
+                lat=city_data["lat"],
+                lon=city_data["lng"],
+                city=body.city,
+                store_id=city_data["store_id"],
+                proxy_manager=proxy_manager,
+            ),
+        )
+        if cache is not None and result.get("status") not in ("error", "invalid_format"):
+            cache[cache_key] = result
 
     return ZeptoResponse(**result)
 
@@ -79,7 +87,13 @@ async def check_zepto_all_cities(body: ZeptoAllCitiesRequest, request: Request):
             yield f"data: {json.dumps({'done': True, 'total': 0})}\n\n"
         return StreamingResponse(empty_stream(), media_type="text/event-stream")
 
-    async def worker(product_id: str, loc: dict) -> None:
+    async def worker(product_id: str, loc: dict, fallback_title: str | None = None, fallback_mrp: float | None = None) -> dict:
+        cache = getattr(request.app.state, "cache", None)
+        cache_key = f"zepto_{product_id}_{loc['name']}"
+        
+        if cache is not None and cache_key in cache:
+            return cache[cache_key].copy()
+
         async with sem:
             loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(
@@ -93,31 +107,52 @@ async def check_zepto_all_cities(body: ZeptoAllCitiesRequest, request: Request):
                     city=loc["name"],
                     store_id=loc["store_id"],
                     proxy_manager=proxy_manager,
+                    fallback_title=fallback_title,
+                    fallback_mrp=fallback_mrp,
                 ),
             )
-            await queue.put(result)
+            
+            if cache is not None and result.get("status") not in ("error", "invalid_format"):
+                cache[cache_key] = result.copy()
+                
+            return result
 
     async def event_stream():
-        tasks = [asyncio.create_task(worker(pid, loc)) for pid, loc in work_items]
         done = 0
 
-        try:
-            while done < total:
-                result = await queue.get()
-                done += 1
-                payload = json.dumps({
-                    **result,
-                    "progress": done,
-                    "total": total,
-                })
-                yield f"data: {payload}\n\n"
+        # 1. First-city pre-check: Scrape LOCATIONS[0] for all PIDs concurrently
+        precheck_tasks = []
+        for pid in body.product_ids:
+            if LOCATIONS:
+                precheck_tasks.append(asyncio.create_task(worker(pid.strip(), LOCATIONS[0])))
+                
+        # Wait for all prechecks and store their titles
+        first_city_results = {}
+        for coro in asyncio.as_completed(precheck_tasks):
+            result = await coro
+            pid = result["product_id"]
+            first_city_results[pid] = result
+            done += 1
+            yield f"data: {json.dumps({**result, 'progress': done, 'total': total})}\n\n"
 
-            await asyncio.gather(*tasks, return_exceptions=True)
-            yield f"data: {json.dumps({'done': True, 'total': total})}\n\n"
-        finally:
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+        # 2. Scrape remaining cities, injecting fallback title/mrp if available
+        remaining_tasks = []
+        for pid in body.product_ids:
+            pid = pid.strip()
+            fallback_title = first_city_results.get(pid, {}).get("title")
+            fallback_mrp = first_city_results.get(pid, {}).get("mrp")
+            if fallback_title == "Not Found" or fallback_title == "Unknown Product":
+                fallback_title = None
+
+            for loc in LOCATIONS[1:]:
+                remaining_tasks.append(asyncio.create_task(worker(pid, loc, fallback_title, fallback_mrp)))
+
+        for coro in asyncio.as_completed(remaining_tasks):
+            result = await coro
+            done += 1
+            yield f"data: {json.dumps({**result, 'progress': done, 'total': total})}\n\n"
+
+        yield f"data: {json.dumps({'done': True, 'total': total})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 

@@ -95,6 +95,7 @@ async def lifespan(app: FastAPI):
     # Initialize proxy manager
     proxy_file = os.getenv("PROXY_FILE", "proxies.txt")
     app.state.proxy_manager = ProxyManager(proxy_file)
+    app.state.proxy_manager_task = asyncio.create_task(app.state.proxy_manager.resurrect_loop())
     proxy_status = app.state.proxy_manager.status()
     logger.info("Proxy pool: %d active, %d dead", proxy_status["active"], proxy_status["dead"])
 
@@ -118,31 +119,28 @@ async def lifespan(app: FastAPI):
 
     try:
         from playwright.async_api import async_playwright
+        from utils.browser_manager import BrowserPoolManager
 
         playwright_instance = await async_playwright().start()
-        browsers = []
-        for i in range(BROWSER_POOL_SIZE):
-            try:
-                b = await playwright_instance.chromium.launch(headless=headless, args=_browser_args)
-                browsers.append(b)
-                logger.info("Browser %d/%d launched (headless=%s)", i + 1, BROWSER_POOL_SIZE, headless)
-            except Exception as e:
-                logger.error("Failed to launch browser %d/%d: %s", i + 1, BROWSER_POOL_SIZE, e)
+        
+        app.state.browser_manager = BrowserPoolManager(playwright_instance, BROWSER_POOL_SIZE, headless, _browser_args, max_requests=500)
+        await app.state.browser_manager.launch_all()
 
-        if not browsers:
+        if not app.state.browser_manager.browsers:
             raise RuntimeError("No browsers launched — cannot start service")
 
         app.state.playwright_instance = playwright_instance
-        app.state.browser_pool = browsers
-        app.state.browser_cycle = itertools.cycle(browsers)
         app.state.playwright_ready = True
+        
+        from cachetools import TTLCache
+        app.state.cache = TTLCache(maxsize=10000, ttl=7200)
 
     except Exception as e:
         logger.error("Failed to launch Playwright browser pool: %s", str(e))
         app.state.playwright_instance = None
-        app.state.browser_pool = []
-        app.state.browser_cycle = iter([])
+        app.state.browser_manager = None
         app.state.playwright_ready = False
+        app.state.cache = None
 
     # Semaphores — total_sem hard-caps ALL contexts; batch_throttle reserves headroom for manual requests
     app.state.total_sem = asyncio.Semaphore(SCRAPE_CONCURRENCY)
@@ -223,13 +221,12 @@ async def lifespan(app: FastAPI):
     if getattr(app.state, "thread_pool", None):
         app.state.thread_pool.shutdown(wait=False)
         logger.info("Thread pool stopped")
-    for b in getattr(app.state, "browser_pool", []):
-        try:
-            await b.close()
-        except Exception:
-            pass
-    if getattr(app.state, "browser_pool", []):
-        logger.info("Playwright browser pool closed (%d browsers)", len(app.state.browser_pool))
+    if getattr(app.state, "browser_manager", None):
+        await app.state.browser_manager.close_all()
+        logger.info("Playwright browser pool closed")
+    if getattr(app.state, "proxy_manager_task", None):
+        app.state.proxy_manager_task.cancel()
+        
     if playwright_instance:
         try:
             await playwright_instance.stop()
@@ -263,11 +260,20 @@ app.add_middleware(
 
 # ── Request logging middleware ──────────────────────────────────────────────
 
+class EndpointFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return msg.find("/cron-status/all") == -1 and msg.find("/sheets/amazon/api/logs") == -1
+
+logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
+
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     """Log every incoming request: method, path, timestamp."""
-    timestamp = datetime.now(IST).isoformat()
-    logger.info("→ %s %s [%s]", request.method, request.url.path, timestamp)
+    noisy_paths = {"/cron-status/all", "/sheets/amazon/api/logs", "/health"}
+    if request.url.path not in noisy_paths:
+        timestamp = datetime.now(IST).isoformat()
+        logger.info("→ %s %s [%s]", request.method, request.url.path, timestamp)
     response = await call_next(request)
     return response
 

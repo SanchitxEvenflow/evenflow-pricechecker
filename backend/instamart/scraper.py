@@ -15,6 +15,7 @@ import re
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse
 
+# pyrefly: ignore [missing-import]
 from playwright.async_api import Browser
 
 from proxy.manager import ProxyManager
@@ -81,6 +82,7 @@ async def fetch_instamart_data(
     store_id: str,
     browser: Browser,
     proxy_manager: ProxyManager | None = None,
+    target_variant_name: str | None = None,
 ) -> dict:
     """
     Fetch product data from Instamart (Swiggy) using the shared Playwright browser.
@@ -164,34 +166,73 @@ async def fetch_instamart_data(
                     continue
                 return _error_result("blocked")
 
+            if "oops something's not right" in lower:
+                logger.info("[Instamart] %s: Oops error page — item not available", city)
+                if proxy_manager:
+                    proxy_manager.report_success(proxy)
+                await _safe_close_context(context)
+                context = None
+                return {
+                    "product_id": item_id,
+                    "city": city,
+                    "title": None,
+                    "price": None,
+                    "mrp": None,
+                    "status": "not_found",
+                    "is_sold_out": False,
+                    "url": product_url,
+                    "checked_at": now,
+                }
+
             # ── Find the script tag that contains both the initial state
             #    AND this item's data — the page may have multiple script tags
             #    where the first has page-shell state (no product) and a later
             #    one has the actual product data ────────────────────────────
             scripts = re.findall(r"<script.*?>(.*?)</script>", content, re.DOTALL)
             target_script = None
+            has_initial_state = False
             for s in scripts:
-                if item_id in s and "window.___INITIAL_STATE___" in s:
-                    target_script = s
-                    break
+                if "window.___INITIAL_STATE___" in s:
+                    has_initial_state = True
+                    if item_id in s:
+                        target_script = s
+                        break
 
             if not target_script:
                 has_initial_state = any("window.___INITIAL_STATE___" in s for s in scripts)
-                id_in_page = item_id in content
-                title_match = re.search(r"<title>(.*?)</title>", content, re.IGNORECASE)
-                page_title = title_match.group(1) if title_match else "unknown"
-                logger.warning(
-                    "[Instamart] %s: target script not found — "
-                    "has_initial_state=%s id_in_page=%s page_title=%r",
-                    city, has_initial_state, id_in_page, page_title,
-                )
-                if proxy_manager:
-                    proxy_manager.report_failure(proxy)
-                await _safe_close_context(context)
-                context = None
-                if attempt < max_proxy_attempts:
-                    continue
-                return _error_result("state_script_not_found")
+                if has_initial_state:
+                    logger.info("[Instamart] %s: initial state found but item_id missing — item not available", city)
+                    if proxy_manager:
+                        proxy_manager.report_success(proxy)
+                    await _safe_close_context(context)
+                    context = None
+                    return {
+                        "product_id": item_id,
+                        "city": city,
+                        "title": None,
+                        "price": None,
+                        "mrp": None,
+                        "status": "not_found",
+                        "is_sold_out": False,
+                        "url": product_url,
+                        "checked_at": now,
+                    }
+                else:
+                    id_in_page = item_id in content
+                    title_match = re.search(r"<title>(.*?)</title>", content, re.IGNORECASE)
+                    page_title = title_match.group(1) if title_match else "unknown"
+                    logger.warning(
+                        "[Instamart] %s: target script not found — "
+                        "has_initial_state=%s id_in_page=%s page_title=%r",
+                        city, has_initial_state, id_in_page, page_title,
+                    )
+                    if proxy_manager:
+                        proxy_manager.report_failure(proxy)
+                    await _safe_close_context(context)
+                    context = None
+                    if attempt < max_proxy_attempts:
+                        continue
+                    return _error_result("state_script_not_found")
 
             # ── Extract and parse the embedded JSON ───────────────────────
             match = re.search(
@@ -246,7 +287,23 @@ async def fetch_instamart_data(
             title = v.get("displayName", "Unknown Product")
 
             if v.get("variations"):
-                v = v["variations"][0]
+                variations = v["variations"]
+                
+                def _get_price(var):
+                    p = var.get("price", {})
+                    val = p.get("offerPrice", {}).get("units") or p.get("mrp", {}).get("units") or float("inf")
+                    return float(val)
+
+                variations.sort(key=_get_price)
+                
+                selected_var = variations[0]
+                if target_variant_name:
+                    for var in variations:
+                        if var.get("displayName") == target_variant_name:
+                            selected_var = var
+                            break
+                            
+                v = selected_var
                 title = v.get("displayName", title)
 
             price_obj = v.get("price", {})

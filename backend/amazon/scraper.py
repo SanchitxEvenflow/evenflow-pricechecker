@@ -217,11 +217,29 @@ def _extract_category_hierarchy(soup: BeautifulSoup) -> dict:
     }
 
 
+_BLOCKED_DOMAINS = {
+    "google-analytics.com",
+    "fls-na.amazon.in",
+    "fls-eu.amazon.in",
+    "amazon-adsystem.com",
+    "doubleclick.net",
+    "googletagmanager.com",
+    "pixel.facebook.com",
+    "images-amazon.com", # amazon ad/tracking images
+}
+
 async def _block_resources(route) -> None:
+    url = route.request.url.lower()
     if route.request.resource_type in _BLOCKED_RESOURCE_TYPES:
         await route.abort()
-    else:
-        await route.continue_()
+        return
+        
+    for domain in _BLOCKED_DOMAINS:
+        if domain in url:
+            await route.abort()
+            return
+            
+    await route.continue_()
 
 
 def _detect_status(soup: BeautifulSoup, response_text: str, asin: str, page_url: str = "") -> str:

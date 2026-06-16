@@ -62,7 +62,7 @@ const instamartConfig: CityScrapeConfig<InstamartResult> = {
   headingBrandClass: "text-[#FC8019]",
   headingBrandText: "instamart",
   headingSuffix: "All Cities Scrape",
-  description: "Paste Instamart product IDs (one per line). Scrapes all 8 cities concurrently.",
+  description: "Paste Instamart product IDs (one per line). Scrapes all 9 locations concurrently.",
   placeholder: "54ZJRDYZYL\n...",
   focusRingClass: "focus:ring-[#FC8019]/50",
   buttonClass: "bg-[#FC8019] hover:bg-[#e06b0b] text-white",

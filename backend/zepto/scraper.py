@@ -140,6 +140,8 @@ def fetch_zepto_data(
     city: str,
     store_id: str,
     proxy_manager: ProxyManager | None = None,
+    fallback_title: str | None = None,
+    fallback_mrp: float | None = None,
 ) -> dict:
     """
     Fetch product data from Zepto's PDP endpoint.
@@ -207,7 +209,7 @@ def fetch_zepto_data(
             })
 
             # Build the PDP URL exactly as the real web app does
-            prod_url = (
+            base_url = (
                 f"{ZEPTO_BFF_URL}/lms/api/v2/get_page"
                 f"?store_id={store_id}"
                 f"&page_type=PDP"
@@ -217,8 +219,9 @@ def fetch_zepto_data(
                 f"&show_new_eta_banner=false"
                 f"&page_size=5"
                 f"&product_variant_id={item_id}"
-                f"&fallback_enabled=True"
             )
+            
+            prod_url = f"{base_url}&fallback_enabled=false"
 
             print(f"[Zepto] {city}: GET {prod_url[:120]}... (attempt {attempt + 1}/{max_proxy_attempts + 1})")
             response = session.get(prod_url, headers=headers, timeout=15)
@@ -263,6 +266,38 @@ def fetch_zepto_data(
             except ValueError as e:
                 print(f"[Zepto] {city}: invalid JSON: {response.text[:300]}")
                 raise e
+
+            # If the product isn't found in the local store, try with fallback to get the price
+            if json_data.get("code") == 5 or not json_data.get("pageLayout"):
+                if fallback_title is not None:
+                    # We already know the title and mrp from a previous city scrape!
+                    print(f"[Zepto] {city}: not in local store, using provided fallback_title...")
+                    if proxy_manager and proxy:
+                        proxy_manager.report_success(proxy)
+                    return {
+                        "product_id": item_id,
+                        "city": city,
+                        "title": fallback_title,
+                        "price": None,
+                        "mrp": fallback_mrp,
+                        "status": "out_of_stock",
+                        "is_sold_out": True,
+                        "url": product_url,
+                        "checked_at": now,
+                    }
+
+                print(f"[Zepto] {city}: not in local store, retrying with fallback...")
+                fallback_url = f"{base_url}&fallback_enabled=True"
+                response = session.get(fallback_url, headers=headers, timeout=15)
+                json_data = response.json()
+                
+                # Mark as out of stock since we had to fallback
+                if "pageLayout" in json_data:
+                    try:
+                        sp = json_data["pageLayout"]["pageData"]["productInfo"]["storeProduct"]
+                        sp["outOfStock"] = True
+                    except KeyError:
+                        pass
 
             # Extract product data
             product = _extract_zepto_product(json_data)
