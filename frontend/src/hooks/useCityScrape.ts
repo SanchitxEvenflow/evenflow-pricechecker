@@ -18,6 +18,7 @@ export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>)
   const [error, setError] = useState("");
   const [stats, setStats] = useState({ total: 0, done: 0, success: 0, failed: 0 });
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [orderedIds, setOrderedIds] = useState<string[]>([]);
   const { data: sheetProducts, loading: productsLoading } = useCachedProducts(`${API}/price/${config.brand}/products`);
 
   const toggleProduct = (id: string) =>
@@ -28,6 +29,7 @@ export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>)
   const handleScrape = async () => {
     const ids = [...new Set([...selectedIds, ...parseIds(idText)])];
     if (!ids.length) { setError(config.emptyInputError); return; }
+    setOrderedIds(ids);
     setError(""); setIsScraping(true);
     const initialResults: Record<string, any> = {};
     for (const id of ids) {
@@ -81,7 +83,7 @@ export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>)
   };
 
   const downloadCSV = () => {
-    const pids = Object.keys(results);
+    const pids = orderedIds.length ? orderedIds : Object.keys(results);
     if (!pids.length) return;
     const hdr = ["Product ID", "Title", ...config.cities.flatMap(c => [`${c} Price`, `${c} MRP`, `${c} Status`])];
     const rows = pids.map(pid => {
@@ -104,5 +106,5 @@ export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>)
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
   };
 
-  return { idText, setIdText, results, isScraping, error, stats, parseIds, handleScrape, downloadCSV, sheetProducts, productsLoading, selectedIds, toggleProduct };
+  return { idText, setIdText, results, orderedIds, isScraping, error, stats, parseIds, handleScrape, downloadCSV, sheetProducts, productsLoading, selectedIds, toggleProduct };
 }

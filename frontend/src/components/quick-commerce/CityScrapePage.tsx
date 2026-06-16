@@ -28,7 +28,7 @@ export function CityScrapePage<T extends CityResult>({ t, dark, config }: { t: T
       {scrape.isScraping && scrape.stats.total > 0 && (
         <ProgressBar dark={dark} t={t} processed={scrape.stats.done} total={scrape.stats.total} colorClass={config.progressColor} />
       )}
-      <CityResultsMatrix t={t} results={scrape.results} config={config} onDownloadCSV={scrape.downloadCSV} sheetProducts={scrape.sheetProducts} />
+      <CityResultsMatrix t={t} results={scrape.results} orderedIds={scrape.orderedIds} config={config} onDownloadCSV={scrape.downloadCSV} sheetProducts={scrape.sheetProducts} />
     </main>
   );
 }

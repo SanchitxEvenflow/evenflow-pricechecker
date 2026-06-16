@@ -1,13 +1,14 @@
 import type { CityResult, CityScrapeConfig, ThemeClasses } from "@/types/price-scraper";
 
-export function CityResultsMatrix<T extends CityResult>({ t, results, config, onDownloadCSV, sheetProducts = [] }: {
+export function CityResultsMatrix<T extends CityResult>({ t, results, orderedIds, config, onDownloadCSV, sheetProducts = [] }: {
   t: ThemeClasses;
   results: Record<string, Record<string, T>>;
+  orderedIds?: string[];
   config: CityScrapeConfig<T>;
   onDownloadCSV: () => void;
   sheetProducts?: import("@/components/shared/ProductPicker").SheetProduct[];
 }) {
-  const pids = Object.keys(results);
+  const pids = orderedIds && orderedIds.length > 0 ? orderedIds : Object.keys(results);
   if (pids.length === 0) return null;
 
   return (
