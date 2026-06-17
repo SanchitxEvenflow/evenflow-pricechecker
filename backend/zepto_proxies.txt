@@ -1,2 +1,1 @@
 http://brd-customer-hl_85f28ec8-zone-residential_proxy1:lmfulum1f8nv@brd.superproxy.io:33335
-http://brd-customer-hl_85f28ec8-zone-freemium-country-in:k5npto0zzul2@brd.superproxy.io:33335
