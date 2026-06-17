@@ -26,6 +26,9 @@ Thumbs.db
 # Project specific
 # Ignoring proxies.txt because it contains proxy credentials
 proxies.txt
+zepto_proxies.txt
+backend/proxies.txt
+backend/zepto_proxies.txt
 
 test_zepto.py
 backend/debug_flipkart/

@@ -48,15 +48,20 @@ export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>)
 
       let suc = 0, fail = 0;
       const processed = new Set<string>();
+      const ctrl = new AbortController();
 
       await fetchEventSource(`${API}${config.endpoint}`, {
         method: "POST",
         headers,
+        signal: ctrl.signal,
         body: JSON.stringify({ product_ids: ids }),
         onmessage(ev) {
           try {
             const d = JSON.parse(ev.data);
-            if (d.done) return;
+            if (d.done) {
+              ctrl.abort();
+              return;
+            }
             
             const key = `${d.product_id}_${d.city}`;
             if (processed.has(key)) return;
@@ -71,7 +76,8 @@ export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>)
                 [d.city]: d
               }
             }));
-            setStats({ total: ids.length * config.cities.length, done: suc + fail, success: suc, failed: fail });
+            const backendProgress = d.progress;
+            setStats({ total: ids.length * config.cities.length, done: backendProgress || (suc + fail), success: suc, failed: fail });
           } catch (e) {
             // ignore malformed chunks
           }

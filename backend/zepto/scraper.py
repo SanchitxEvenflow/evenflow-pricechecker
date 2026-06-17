@@ -184,7 +184,7 @@ def fetch_zepto_data(
     cf_worker_url = os.getenv("ZEPTO_CLOUDFLARE_WORKER_URL", "")
     has_cf_worker = bool(cf_worker_url)
     
-    max_attempts = 3 if has_cf_worker else (1 if proxy_manager and proxy_manager.active_pool else 0)
+    max_attempts = 3 if has_cf_worker else (3 if proxy_manager and proxy_manager.active_pool else 0)
 
     import time
     import random
