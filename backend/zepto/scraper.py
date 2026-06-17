@@ -207,7 +207,7 @@ def fetch_zepto_data(
                 break
 
         proxies = {"http": proxy, "https": proxy} if proxy else None
-        session = requests.Session(impersonate="chrome131", proxies=proxies)
+        session = requests.Session(impersonate="chrome131", proxies=proxies, verify=False)
 
         try:
             # Build per-request IDs (mimic browser behaviour)
@@ -284,7 +284,7 @@ def fetch_zepto_data(
                 print(f"[Zepto] {city}: Response snippet: {response.text[:300]}")
                 if proxy_manager:
                     proxy_manager.report_failure(base_proxy)
-                if attempt < max_proxy_attempts:
+                if attempt < max_attempts:
                     continue
                 return _error_result(f"http_{response.status_code}")
 
@@ -355,7 +355,7 @@ def fetch_zepto_data(
             print(f"[Zepto] {city}: NETWORK ERROR (attempt {attempt + 1}): {e}")
             if proxy_manager:
                 proxy_manager.report_failure(base_proxy)
-            if attempt < max_proxy_attempts:
+            if attempt < max_attempts:
                 continue
             return _error_result(f"network_error: {e}")
 
@@ -367,7 +367,7 @@ def fetch_zepto_data(
                     logger.error("Cloudflare challenge detected -- rotate proxies")
                     if proxy_manager:
                         proxy_manager.report_failure(base_proxy)
-                    if attempt < max_proxy_attempts:
+                    if attempt < max_attempts:
                         continue
             return _error_result(f"extraction_error: {e}")
 
@@ -376,7 +376,7 @@ def fetch_zepto_data(
             print(f"[Zepto] {city}: UNEXPECTED ERROR (attempt {attempt + 1}): {e}")
             if proxy_manager:
                 proxy_manager.report_failure(base_proxy)
-            if attempt < max_proxy_attempts:
+            if attempt < max_attempts:
                 continue
             return _error_result(f"unexpected: {e}")
 

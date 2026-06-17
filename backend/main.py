@@ -99,6 +99,10 @@ async def lifespan(app: FastAPI):
     proxy_status = app.state.proxy_manager.status()
     logger.info("Proxy pool: %d active, %d dead", proxy_status["active"], proxy_status["dead"])
 
+    zepto_proxy_file = os.getenv("ZEPTO_PROXY_FILE", "zepto_proxies.txt")
+    app.state.zepto_proxy_manager = ProxyManager(zepto_proxy_file)
+    app.state.zepto_proxy_manager_task = asyncio.create_task(app.state.zepto_proxy_manager.resurrect_loop())
+
     # Initialize Google Sheets client and Thread Pool
     # Size to cover simultaneous Blinkit + Zepto executor concurrency plus headroom.
     _blinkit_workers = int(os.getenv("BLINKIT_CONCURRENCY", "10"))
