@@ -125,18 +125,20 @@ class ProxyManager:
             return proxy
 
     def report_failure(self, proxy: str) -> None:
-        """Increment failure count; move to dead pool after 2 failures."""
+        """Increment failure count; move to dead pool after 10 failures (unless it's the last proxy)."""
         if proxy is None:
             return
 
         with self._lock:
             self.failure_count[proxy] = self.failure_count.get(proxy, 0) + 1
 
-            if self.failure_count[proxy] >= 10:
+            if self.failure_count[proxy] >= 10 and len(self.active_pool) > 1:
                 if proxy in self.active_pool:
                     self.active_pool.remove(proxy)
                 self.dead_pool[proxy] = time.time()
                 logger.warning("Proxy moved to dead pool (failures=%d): %s", self.failure_count[proxy], proxy)
+            elif self.failure_count[proxy] >= 10 and len(self.active_pool) <= 1:
+                logger.warning("Proxy %s has %d failures, but it's the last one. Keeping it alive to avoid direct connection fallback.", proxy, self.failure_count[proxy])
 
     def report_success(self, proxy: str) -> None:
         """Reset failure count on successful use."""
