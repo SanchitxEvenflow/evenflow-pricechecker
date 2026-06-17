@@ -33,7 +33,7 @@ export function CityResultsMatrix<T extends CityResult>({ t, results, orderedIds
           </thead>
           <tbody className={`divide-y ${t.border}`}>
             {pids.map(pid => {
-              const firstResultWithTitle = Object.values(results[pid] || {}).find(r => r.title);
+              const firstResultWithTitle = Object.values(results[pid] || {}).find(r => r.title && r.title !== "Not Found" && r.title !== "Unknown Product");
               const sheetTitle = sheetProducts?.find((x: any) => x.id === pid)?.title;
               const title = sheetTitle || firstResultWithTitle?.title || "—";
               return (

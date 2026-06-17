@@ -42,6 +42,7 @@ export function useAmazonManualScrape() {
       if (token) headers["Authorization"] = `Bearer ${token}`;
 
       let suc = 0, fail = 0;
+      const processed = new Set<string>();
 
       await fetchEventSource(`${API}/api/amazon/scrape-manual`, {
         method: "POST",
@@ -51,6 +52,9 @@ export function useAmazonManualScrape() {
           try {
             const data = JSON.parse(ev.data);
             if (data.done) return;
+            
+            if (processed.has(data.asin)) return;
+            processed.add(data.asin);
 
             const st = data.status || "error";
             if (["error", "not_found", "blocked", "invalid_format"].includes(st)) fail++; else suc++;
