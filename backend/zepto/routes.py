@@ -31,7 +31,7 @@ async def check_zepto_price(body: ZeptoRequest, request: Request):
             detail=f"Invalid city '{body.city}'. Valid cities: {CITY_NAMES}",
         )
 
-    proxy_manager = request.app.state.proxy_manager
+    proxy_manager = request.app.state.zepto_proxy_manager
 
     cache = getattr(request.app.state, "cache", None)
     cache_key = f"zepto_{body.product_id}_{body.city}"
@@ -70,7 +70,7 @@ async def check_zepto_all_cities(body: ZeptoAllCitiesRequest, request: Request):
     Scrape Zepto for one or more product IDs across all 10 cities.
     Results are streamed as SSE events as they complete.
     """
-    proxy_manager = request.app.state.proxy_manager
+    proxy_manager = request.app.state.zepto_proxy_manager
     sem = asyncio.Semaphore(ZEPTO_CONCURRENCY)
     queue: asyncio.Queue = asyncio.Queue()
 

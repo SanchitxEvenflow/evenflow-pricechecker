@@ -500,7 +500,7 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str) -> None:
             "error": None,
         })
 
-        proxy_manager = app.state.proxy_manager
+        proxy_manager = app.state.zepto_proxy_manager
         sem = asyncio.Semaphore(int(os.getenv("ZEPTO_CONCURRENCY", "10")))
         loop = asyncio.get_running_loop()
 
