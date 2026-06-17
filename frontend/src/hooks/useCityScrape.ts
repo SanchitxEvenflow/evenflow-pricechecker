@@ -47,6 +47,7 @@ export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>)
       if (token) headers["Authorization"] = `Bearer ${token}`;
 
       let suc = 0, fail = 0;
+      const processed = new Set<string>();
 
       await fetchEventSource(`${API}${config.endpoint}`, {
         method: "POST",
@@ -56,6 +57,11 @@ export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>)
           try {
             const d = JSON.parse(ev.data);
             if (d.done) return;
+            
+            const key = `${d.product_id}_${d.city}`;
+            if (processed.has(key)) return;
+            processed.add(key);
+
             if (d.status === "error") fail++; else suc++;
 
             setResults(prev => ({
@@ -87,7 +93,7 @@ export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>)
     if (!pids.length) return;
     const hdr = ["Product ID", "Title", ...config.cities.flatMap(c => [`${c} Price`, `${c} MRP`, `${c} Status`])];
     const rows = pids.map(pid => {
-      const firstResultWithTitle = Object.values(results[pid] || {}).find(r => r.title);
+      const firstResultWithTitle = Object.values(results[pid] || {}).find(r => r.title && r.title !== "Not Found" && r.title !== "Unknown Product");
       const title = sheetProducts?.find(x => x.id === pid)?.title || firstResultWithTitle?.title || "—";
       const cells: string[] = [csvEscape(pid), csvEscape(title)];
       config.cities.forEach(c => {
