@@ -48,6 +48,7 @@ export function useAmazonManualScrape() {
         method: "POST",
         headers,
         body: JSON.stringify({ asins }),
+        openWhenHidden: true,
         onmessage(ev) {
           try {
             const data = JSON.parse(ev.data);

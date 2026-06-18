@@ -119,33 +119,50 @@ async def check_blinkit_all_cities(body: BlinkitAllCitiesRequest, request: Reque
 
     async def event_stream():
         done = 0
-        
-        # 1. First-city pre-check: Scrape LOCATIONS[0] for all PIDs concurrently
         precheck_tasks = []
-        for pid in body.product_ids:
-            if LOCATIONS:
-                precheck_tasks.append(asyncio.create_task(worker(pid.strip(), LOCATIONS[0])))
-                
-        # Wait for all prechecks to finish and yield them
-        for coro in asyncio.as_completed(precheck_tasks):
-            result = await coro
-            done += 1
-            yield f"data: {json.dumps({**result, 'progress': done, 'total': total})}\n\n"
-
-        # 2. Scrape remaining cities for all PIDs
         remaining_tasks = []
-        for pid in body.product_ids:
-            for loc in LOCATIONS[1:]:
-                remaining_tasks.append(asyncio.create_task(worker(pid.strip(), loc)))
-                
-        for coro in asyncio.as_completed(remaining_tasks):
-            result = await coro
-            done += 1
-            yield f"data: {json.dumps({**result, 'progress': done, 'total': total})}\n\n"
+        try:
+            # 1. First-city pre-check: Scrape LOCATIONS[0] for all PIDs concurrently
+            for pid in body.product_ids:
+                if LOCATIONS:
+                    precheck_tasks.append(asyncio.create_task(worker(pid.strip(), LOCATIONS[0])))
+                    
+            # Wait for all prechecks and store their titles
+            first_city_results = {}
+            for coro in asyncio.as_completed(precheck_tasks):
+                result = await coro
+                pid = result["product_id"]
+                first_city_results[pid] = result
+                done += 1
+                yield f"data: {json.dumps({**result, 'progress': done, 'total': total})}\n\n"
 
-        yield f"data: {json.dumps({'done': True, 'total': total})}\n\n"
+            # 2. Scrape remaining cities, injecting fallback title if available
+            for pid in body.product_ids:
+                pid = pid.strip()
+                fallback_title = first_city_results.get(pid, {}).get("title")
+                if fallback_title == "Not Found" or fallback_title == "Unknown Product":
+                    fallback_title = None
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+                for loc in LOCATIONS[1:]:
+                    remaining_tasks.append(asyncio.create_task(worker(pid, loc, fallback_title)))
+
+            for coro in asyncio.as_completed(remaining_tasks):
+                result = await coro
+                done += 1
+                yield f"data: {json.dumps({**result, 'progress': done, 'total': total})}\n\n"
+
+            yield f"data: {json.dumps({'done': True, 'total': total})}\n\n"
+        finally:
+            for task in precheck_tasks + remaining_tasks:
+                if not task.done():
+                    task.cancel()
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no"
+    }
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
 
 
 # ── Sheet-based manual trigger ──────────────────────────────────────────────

@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import os
-import random
+
 from datetime import datetime, timezone, timedelta
 from functools import partial
 
@@ -16,11 +16,8 @@ from utils.scrape_helpers import (
     MANUAL_RESERVED,
     format_update as _format_update,
     format_flipkart_update as _format_flipkart_update,
-    BLINKIT_CITIES,
     format_blinkit_row,
-    ZEPTO_CITIES,
     format_zepto_row,
-    INSTAMART_CITIES,
     format_instamart_row,
     get_browser,
 )
@@ -539,7 +536,7 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str) -> None:
             fallback_title = result1.get("title")
             fallback_mrp = result1.get("mrp")
             if fallback_title in ("Not Found", "Unknown Product"):
-                 fallback_title = None
+                fallback_title = None
                  
             city_tasks = [asyncio.create_task(scrape_one_city(pid, loc, fallback_title, fallback_mrp)) for loc in ZEPTO_LOCATIONS[1:]]
             try:

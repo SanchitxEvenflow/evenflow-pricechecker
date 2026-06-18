@@ -47,6 +47,7 @@ export function useFlipkartManualScrape() {
         method: "POST",
         headers,
         body: JSON.stringify({ fsns }),
+        openWhenHidden: true,
         onmessage(ev) {
           try {
             const data = JSON.parse(ev.data);

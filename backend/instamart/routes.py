@@ -106,37 +106,46 @@ async def check_instamart_all_cities(body: InstamartAllCitiesRequest, request: R
 
     async def event_stream():
         done = 0
-        
-        # 1. First-city pre-check: Scrape LOCATIONS[0] for all PIDs concurrently
         precheck_tasks = []
-        for pid in body.product_ids:
-            if LOCATIONS:
-                precheck_tasks.append(asyncio.create_task(worker(pid.strip(), LOCATIONS[0])))
-                
-        # Wait for all prechecks and yield them
-        target_variants = {}
-        for coro in asyncio.as_completed(precheck_tasks):
-            result = await coro
-            target_variants[result['product_id']] = result.get('title')
-            done += 1
-            yield f"data: {json.dumps({**result, 'progress': done, 'total': total})}\n\n"
-
-        # 2. Scrape remaining cities
         remaining_tasks = []
-        for pid in body.product_ids:
-            clean_pid = pid.strip()
-            target_variant = target_variants.get(clean_pid)
-            for loc in LOCATIONS[1:]:
-                remaining_tasks.append(asyncio.create_task(worker(clean_pid, loc, target_variant)))
+        try:
+            # 1. First-city pre-check: Scrape LOCATIONS[0] for all PIDs concurrently
+            for pid in body.product_ids:
+                if LOCATIONS:
+                    precheck_tasks.append(asyncio.create_task(worker(pid.strip(), LOCATIONS[0])))
+                    
+            # Wait for all prechecks and yield them
+            target_variants = {}
+            for coro in asyncio.as_completed(precheck_tasks):
+                result = await coro
+                target_variants[result['product_id']] = result.get('title')
+                done += 1
+                yield f"data: {json.dumps({**result, 'progress': done, 'total': total})}\n\n"
 
-        for coro in asyncio.as_completed(remaining_tasks):
-            result = await coro
-            done += 1
-            yield f"data: {json.dumps({**result, 'progress': done, 'total': total})}\n\n"
+            # 2. Scrape remaining cities
+            for pid in body.product_ids:
+                clean_pid = pid.strip()
+                target_variant = target_variants.get(clean_pid)
+                for loc in LOCATIONS[1:]:
+                    remaining_tasks.append(asyncio.create_task(worker(clean_pid, loc, target_variant)))
 
-        yield f"data: {json.dumps({'done': True, 'total': total})}\n\n"
+            for coro in asyncio.as_completed(remaining_tasks):
+                result = await coro
+                done += 1
+                yield f"data: {json.dumps({**result, 'progress': done, 'total': total})}\n\n"
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+            yield f"data: {json.dumps({'done': True, 'total': total})}\n\n"
+        finally:
+            for task in precheck_tasks + remaining_tasks:
+                if not task.done():
+                    task.cancel()
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no"
+    }
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
 
 
 # ── Sheet-based manual trigger ──────────────────────────────────────────────

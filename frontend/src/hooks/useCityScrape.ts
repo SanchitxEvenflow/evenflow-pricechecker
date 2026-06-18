@@ -55,6 +55,7 @@ export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>)
         headers,
         signal: ctrl.signal,
         body: JSON.stringify({ product_ids: ids }),
+        openWhenHidden: true,
         onmessage(ev) {
           try {
             const d = JSON.parse(ev.data);
@@ -63,21 +64,43 @@ export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>)
               return;
             }
             
-            const key = `${d.product_id}_${d.city}`;
-            if (processed.has(key)) return;
-            processed.add(key);
-
-            if (d.status === "error") fail++; else suc++;
-
-            setResults(prev => ({
-              ...prev,
-              [d.product_id]: {
-                ...prev[d.product_id],
-                [d.city]: d
+            setResults(prev => {
+              const productRow = prev[d.product_id] || {};
+              // Prevent unnecessary state updates if the result is identical
+              if (productRow[d.city]?.status === d.status && productRow[d.city]?.price === d.price) {
+                 return prev;
               }
-            }));
-            const backendProgress = d.progress;
-            setStats({ total: ids.length * config.cities.length, done: backendProgress || (suc + fail), success: suc, failed: fail });
+              
+              const next = {
+                ...prev,
+                [d.product_id]: {
+                  ...productRow,
+                  [d.city]: d
+                }
+              };
+              
+              // Mathematically guarantee stats cannot exceed the total grid cells
+              let newSuc = 0;
+              let newFail = 0;
+              let newDone = 0;
+              Object.values(next).forEach(row => {
+                Object.values(row).forEach(cell => {
+                  if (cell.status === "error") newFail++;
+                  else if (cell.status && cell.status !== "pending") newSuc++;
+                  
+                  if (cell.status && cell.status !== "pending") newDone++;
+                });
+              });
+              
+              setStats({ 
+                total: ids.length * config.cities.length, 
+                done: newDone, 
+                success: newSuc, 
+                failed: newFail 
+              });
+              
+              return next;
+            });
           } catch (e) {
             // ignore malformed chunks
           }
