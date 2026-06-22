@@ -39,13 +39,14 @@ logger = logging.getLogger(__name__)
 IST = timezone(timedelta(hours=5, minutes=30))
 
 
-async def _run_full_scrape(app, tab_prefix: str, run_type: str) -> None:
+async def _run_full_scrape(app, tab_prefix: str, run_type: str, write_historical: bool = True) -> None:
     """Core scrape logic shared by both automatic cron and manual trigger.
 
     Args:
         app: FastAPI app instance (for browser, proxy_manager, cron_status)
         tab_prefix: Prefix for the new tab name (e.g. "Run" or "Manual_Trigger")
         run_type: "automatic" or "manual" — used for logging
+        write_historical: If True, appends results to the Historical tab (cron only).
     """
     # Synchronous guard + lock. No await between check and set → no race in single-threaded asyncio.
     if app.state.cron_status.get("is_running"):
@@ -190,12 +191,14 @@ async def _run_full_scrape(app, tab_prefix: str, run_type: str) -> None:
                     except (Exception, asyncio.CancelledError):
                         logger.exception("Cron: final write failed")
                 hist_tab = os.getenv("AMAZON_HISTORICAL_TAB", "Historical")
-                if historical_rows:
+                if write_historical and historical_rows:
                     try:
                         await sheets_client.async_append_to_historical(sheet_id, hist_tab, historical_rows)
                         logger.info("Cron: appended %d rows to '%s'", len(historical_rows), hist_tab)
                     except (Exception, asyncio.CancelledError):
                         logger.exception("Cron: failed to append to historical tab '%s'", hist_tab)
+                elif not write_historical:
+                    logger.info("Cron: skipping historical append (manual trigger)")
             finally:
                 run_logger.complete_log(run_id, total_success, total_failed, new_tab)
 
@@ -225,7 +228,7 @@ async def run_scheduled_scrape(app) -> None:
 async def run_manual_trigger(app) -> None:
     """Called when user manually triggers the full scrape from the UI."""
     await asyncio.sleep(0.1)
-    await _run_full_scrape(app, tab_prefix="Manual_Trigger", run_type="manual")
+    await _run_full_scrape(app, tab_prefix="Manual_Trigger", run_type="manual", write_historical=False)
 
 
 async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str) -> None:
@@ -887,11 +890,14 @@ async def run_manual_instamart_trigger(app) -> None:
 
 
 
-async def _run_full_flipkart_scrape(app, tab_prefix: str, run_type: str) -> None:
+async def _run_full_flipkart_scrape(app, tab_prefix: str, run_type: str, write_historical: bool = True) -> None:
     """Core scrape logic for Flipkart sheet-based runs.
 
     Reads FSNs from FLIPKART_SHEET_ID / FLIPKART_SOURCE_TAB, scrapes each FSN
     via Playwright, and writes results to a new tab in the Flipkart sheet.
+
+    Args:
+        write_historical: If True, appends results to the Historical tab (cron only).
     """
     # Synchronous guard + lock. No await between check and set → no race in single-threaded asyncio.
     if app.state.flipkart_cron_status.get("is_running"):
@@ -1002,7 +1008,7 @@ async def _run_full_flipkart_scrape(app, tab_prefix: str, run_type: str) -> None
                 total_processed += 1
                 fmt = _format_flipkart_update(result)
                 pending_writes.append(fmt)
-                fsn = row_to_fsn.get(result.get("row"), "")
+                fsn = result.get("fsn") or row_to_fsn.get(result.get("row"), "")
                 historical_rows.append([fsn] + fmt["values"] + [new_tab])
                 app.state.flipkart_cron_status["progress"] = total_processed
                 run_logger.update_progress(run_id, total_success, total_failed)
@@ -1028,12 +1034,14 @@ async def _run_full_flipkart_scrape(app, tab_prefix: str, run_type: str) -> None
                     except (Exception, asyncio.CancelledError):
                         logger.exception("Flipkart cron: final write failed")
                 hist_tab = os.getenv("FLIPKART_HISTORICAL_TAB", "HISTORICAL")
-                if historical_rows:
+                if write_historical and historical_rows:
                     try:
                         await sheets_client.async_append_to_historical(sheet_id, hist_tab, historical_rows)
                         logger.info("Flipkart cron: appended %d rows to '%s'", len(historical_rows), hist_tab)
                     except (Exception, asyncio.CancelledError):
                         logger.exception("Flipkart cron: failed to append to historical tab '%s'", hist_tab)
+                elif not write_historical:
+                    logger.info("Flipkart cron: skipping historical append (manual trigger)")
             finally:
                 run_logger.complete_log(run_id, total_success, total_failed, new_tab)
 
@@ -1062,7 +1070,7 @@ async def run_scheduled_flipkart_scrape(app) -> None:
 
 async def run_manual_flipkart_trigger(app) -> None:
     """Called when user manually triggers the Flipkart full scrape from the UI."""
-    await _run_full_flipkart_scrape(app, tab_prefix="Flipkart_Manual", run_type="flipkart_manual")
+    await _run_full_flipkart_scrape(app, tab_prefix="Flipkart_Manual", run_type="flipkart_manual", write_historical=False)
 
 
 def setup_scheduler(app) -> AsyncIOScheduler | None:
