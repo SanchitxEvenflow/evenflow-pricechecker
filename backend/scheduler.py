@@ -988,7 +988,7 @@ async def _run_full_flipkart_scrape(app, tab_prefix: str, run_type: str, write_h
                     result = await scrape_one(r)
                 except Exception:
                     logger.exception("Flipkart cron: scrape task raised unexpectedly")
-                    result = {"status": "error", "row": r["row"]}
+                    result = {"status": "error", "row": r["row"], "fsn": r["fsn"]}
                 await results_queue.put(result)
 
         worker_tasks: list[asyncio.Task] = []
