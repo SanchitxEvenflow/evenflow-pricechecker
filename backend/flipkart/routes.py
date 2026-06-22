@@ -44,8 +44,6 @@ async def check_flipkart_price(body: FlipkartRequest, request: Request):
     return FlipkartResponse(
         fsn=result["fsn"],
         price=result.get("price", ""),
-        mrp=result.get("mrp"),
-        discount=result.get("discount"),
         rating=result.get("rating"),
         rating_count=result.get("rating_count"),
         status=result["status"],

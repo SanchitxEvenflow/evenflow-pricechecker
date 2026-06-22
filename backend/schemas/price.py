@@ -81,8 +81,6 @@ class AmazonResponse(BaseModel):
 class FlipkartResponse(BaseModel):
     fsn: str
     price: str
-    mrp: str | None = None
-    discount: str | None = None
     rating: str | None = None
     rating_count: str | None = None
     fulfilled_by: str | None = None

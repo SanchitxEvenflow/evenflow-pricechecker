@@ -208,7 +208,10 @@ async def lifespan(app: FastAPI):
         logger.info("Cron scheduler active — next run at %02d:%02d IST",
                     int(os.getenv("AMAZON_CRON_HOUR", "10")),
                     int(os.getenv("AMAZON_CRON_MINUTE", "0")))
-
+        logger.info("Cron scheduler active — next run at %02d:%02d IST",
+                    int(os.getenv("FLIPKART_CRON_HOUR", "10")),
+                    int(os.getenv("FLIPKART_CRON_MINUTE", "0")))
+    
     logger.info("Price Checker service ready!")
 
     yield

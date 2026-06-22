@@ -104,7 +104,7 @@ def _cache_url(fsn: str, resolved_url: str) -> None:
 # This JS runs in the browser and returns all extractable product data at once
 JS_EXTRACT_ALL = r"""
 () => {
-    const result = { price: null, mrp: null, discount: null, rating: null, rating_count: null, fulfilled_by: null };
+    const result = { price: null, rating: null, rating_count: null, fulfilled_by: null };
 
     // ── Strategy 1: JSON-LD structured data ──
     const ldScripts = document.querySelectorAll('script[type="application/ld+json"]');
@@ -136,26 +136,15 @@ JS_EXTRACT_ALL = r"""
 
     // ── Strategy 2: Targeted CSS selectors (new Flipkart React layout) ──
 
-    // Price + MRP: div.css-g5y9jx price container
-    if (!result.price || !result.mrp) {
+    // Price: div.css-g5y9jx price container
+    if (!result.price) {
         const container = document.querySelector('div.css-g5y9jx');
         if (container) {
-            if (!result.price) {
-                for (const child of container.querySelectorAll('div')) {
-                    const s = child.getAttribute('style') || '';
-                    if (!s.includes('line-through')) {
-                        const text = child.textContent.trim();
-                        if (/^₹[\\d,]+$/.test(text)) { result.price = text; break; }
-                    }
-                }
-            }
-            if (!result.mrp) {
-                for (const child of container.querySelectorAll('div')) {
-                    const s = child.getAttribute('style') || '';
-                    if (s.includes('line-through')) {
-                        const digits = child.textContent.trim().replace(/[^\\d,]/g, '');
-                        if (digits) { result.mrp = '₹' + digits; break; }
-                    }
+            for (const child of container.querySelectorAll('div')) {
+                const s = child.getAttribute('style') || '';
+                if (!s.includes('line-through')) {
+                    const text = child.textContent.trim();
+                    if (/^₹[\\d,]+$/.test(text)) { result.price = text; break; }
                 }
             }
         }
@@ -198,30 +187,6 @@ JS_EXTRACT_ALL = r"""
                     result.price = text;
                     break;
                 }
-            }
-        }
-    }
-
-    // MRP: look for strikethrough prices (Strategy 3 fallback)
-    if (!result.mrp) {
-        const strikeThroughs = document.querySelectorAll('s, [style*="line-through"], del');
-        for (const el of strikeThroughs) {
-            const text = el.textContent.trim();
-            if (/₹[\\d,]+/.test(text)) {
-                result.mrp = text.match(/₹[\\d,]+/)[0];
-                break;
-            }
-        }
-    }
-
-    // Discount: look for percentage patterns
-    if (!result.discount) {
-        const allEls = document.querySelectorAll('div, span');
-        for (const el of allEls) {
-            const text = el.textContent.trim();
-            if (/^[↓▼]?\\d+%\\s*off$/i.test(text) || /^[↓▼]\\d+%$/.test(text)) {
-                result.discount = text;
-                break;
             }
         }
     }
@@ -394,8 +359,6 @@ async def scrape_flipkart(fsn: str, browser: Browser, proxy_manager: ProxyManage
             logger.info("JS extraction result: %s", data)
 
             price = data.get("price") if data else None
-            mrp = data.get("mrp") if data else None
-            discount = data.get("discount") if data else None
             rating = data.get("rating") if data else None
             rating_count = data.get("rating_count") if data else None
             fulfilled_by = data.get("fulfilled_by") if data else None
@@ -424,15 +387,13 @@ async def scrape_flipkart(fsn: str, browser: Browser, proxy_manager: ProxyManage
             _cache_url(fsn, resolved_url)
 
             logger.info(
-                "Flipkart scraped FSN %s: price=%s, mrp=%s, discount=%s, rating=%s, count=%s, fulfilled_by=%s",
-                fsn, price, mrp, discount, rating, rating_count, fulfilled_by,
+                "Flipkart scraped FSN %s: price=%s, rating=%s, count=%s, fulfilled_by=%s",
+                fsn, price, rating, rating_count, fulfilled_by,
             )
 
             return {
                 "fsn": fsn,
                 "price": price,
-                "mrp": mrp,
-                "discount": discount,
                 "rating": rating,
                 "rating_count": rating_count,
                 "fulfilled_by": fulfilled_by,
@@ -455,8 +416,6 @@ async def scrape_flipkart(fsn: str, browser: Browser, proxy_manager: ProxyManage
             return {
                 "fsn": fsn,
                 "price": "",
-                "mrp": None,
-                "discount": None,
                 "rating": None,
                 "rating_count": None,
                 "status": "error",
@@ -473,8 +432,6 @@ async def scrape_flipkart(fsn: str, browser: Browser, proxy_manager: ProxyManage
     return {
         "fsn": fsn,
         "price": "",
-        "mrp": None,
-        "discount": None,
         "rating": None,
         "rating_count": None,
         "status": "error",
@@ -529,8 +486,6 @@ def _error_result(fsn: str, url: str, status: str) -> dict:
     return {
         "fsn": fsn,
         "price": "",
-        "mrp": None,
-        "discount": None,
         "rating": None,
         "rating_count": None,
         "status": status,

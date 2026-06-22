@@ -53,8 +53,6 @@ export interface FlipkartScrapeResult {
   fsn: string;
   title?: string;
   price?: string;
-  mrp?: string;
-  discount?: string;
   rating?: string;
   rating_count?: string;
   fulfilled_by?: string;
