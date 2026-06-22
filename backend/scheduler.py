@@ -940,6 +940,8 @@ async def _run_full_flipkart_scrape(app, tab_prefix: str, run_type: str) -> None
 
         # Remap row numbers — header is row 1, FSNs start at row 2
         remapped = [{"row": i + 2, "fsn": fsn} for i, fsn in enumerate(fsns)]
+        row_to_fsn = {r["row"]: r["fsn"] for r in remapped}
+        historical_rows: list[list] = []
 
         app.state.flipkart_cron_status.update({
             "last_run_at": run_start.isoformat(),
@@ -998,7 +1000,10 @@ async def _run_full_flipkart_scrape(app, tab_prefix: str, run_type: str) -> None
                 else:
                     total_success += 1
                 total_processed += 1
-                pending_writes.append(_format_flipkart_update(result))
+                fmt = _format_flipkart_update(result)
+                pending_writes.append(fmt)
+                fsn = row_to_fsn.get(result.get("row"), "")
+                historical_rows.append([fsn] + fmt["values"] + [new_tab])
                 app.state.flipkart_cron_status["progress"] = total_processed
                 run_logger.update_progress(run_id, total_success, total_failed)
 
@@ -1022,6 +1027,13 @@ async def _run_full_flipkart_scrape(app, tab_prefix: str, run_type: str) -> None
                         logger.info("Flipkart cron: wrote final %d rows to '%s'", len(pending_writes), new_tab)
                     except (Exception, asyncio.CancelledError):
                         logger.exception("Flipkart cron: final write failed")
+                hist_tab = os.getenv("FLIPKART_HISTORICAL_TAB", "HISTORICAL")
+                if historical_rows:
+                    try:
+                        await sheets_client.async_append_to_historical(sheet_id, hist_tab, historical_rows)
+                        logger.info("Flipkart cron: appended %d rows to '%s'", len(historical_rows), hist_tab)
+                    except (Exception, asyncio.CancelledError):
+                        logger.exception("Flipkart cron: failed to append to historical tab '%s'", hist_tab)
             finally:
                 run_logger.complete_log(run_id, total_success, total_failed, new_tab)
 
@@ -1038,6 +1050,14 @@ async def _run_full_flipkart_scrape(app, tab_prefix: str, run_type: str) -> None
 
     finally:
         app.state.flipkart_cron_status["is_running"] = False
+
+
+async def run_scheduled_flipkart_scrape(app) -> None:
+    """Called by APScheduler on cron intervals."""
+    if app.state.flipkart_cron_status.get("is_running"):
+        logger.warning("Flipkart: scheduled scrape skipped — a run is already active (duplicate trigger?)")
+        return
+    await _run_full_flipkart_scrape(app, tab_prefix="Flipkart_Run", run_type="flipkart_automatic")
 
 
 async def run_manual_flipkart_trigger(app) -> None:
@@ -1063,6 +1083,21 @@ def setup_scheduler(app) -> AsyncIOScheduler | None:
         max_instances=1,
         coalesce=True,
     )
+    
+    flipkart_cron_hour = int(os.getenv("FLIPKART_CRON_HOUR", "9"))
+    flipkart_cron_minute = int(os.getenv("FLIPKART_CRON_MINUTE", "15"))
+    scheduler.add_job(
+        run_scheduled_flipkart_scrape,
+        "cron",
+        hour=flipkart_cron_hour,
+        minute=flipkart_cron_minute,
+        args=[app],
+        id="flipkart_daily_scrape",
+        max_instances=1,
+        coalesce=True,
+    )
+    
     scheduler.start()
     logger.info("Cron: Amazon daily scrape scheduled at %02d:%02d IST", cron_hour, cron_minute)
+    logger.info("Cron: Flipkart daily scrape scheduled at %02d:%02d IST", flipkart_cron_hour, flipkart_cron_minute)
     return scheduler
