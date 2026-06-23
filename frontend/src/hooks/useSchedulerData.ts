@@ -11,16 +11,19 @@ export function useSchedulerData() {
   const [flipkartStatus, setFlipkartStatus] = useState<CronStatus | null>(null);
   const [zeptoStatus, setZeptoStatus] = useState<CronStatus | null>(null);
   const [instamartStatus, setInstamartStatus] = useState<CronStatus | null>(null);
+  const [flipkartMinutesStatus, setFlipkartMinutesStatus] = useState<CronStatus | null>(null);
   const [isTriggering, setIsTriggering] = useState(false);
   const [isBlinkitTriggering, setIsBlinkitTriggering] = useState(false);
   const [isFlipkartTriggering, setIsFlipkartTriggering] = useState(false);
   const [isZeptoTriggering, setIsZeptoTriggering] = useState(false);
   const [isInstamartTriggering, setIsInstamartTriggering] = useState(false);
+  const [isFlipkartMinutesTriggering, setIsFlipkartMinutesTriggering] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [isBlinkitCancelling, setIsBlinkitCancelling] = useState(false);
   const [isFlipkartCancelling, setIsFlipkartCancelling] = useState(false);
   const [isZeptoCancelling, setIsZeptoCancelling] = useState(false);
   const [isInstamartCancelling, setIsInstamartCancelling] = useState(false);
+  const [isFlipkartMinutesCancelling, setIsFlipkartMinutesCancelling] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [toast, setToast] = useState<SchedulerToast | null>(null);
 
@@ -42,6 +45,7 @@ export function useSchedulerData() {
         setBlinkitStatus(data.blinkit);
         setZeptoStatus(data.zepto);
         setInstamartStatus(data.instamart);
+        setFlipkartMinutesStatus(data.flipkart_minutes);
       }
     } catch {}
   }, []);
@@ -81,6 +85,7 @@ export function useSchedulerData() {
   const handleFlipkartTrigger = makeTrigger("/sheets/flipkart/api/trigger-manual-scheduler", setIsFlipkartTriggering, "Flipkart manual scrape triggered! Check progress below.");
   const handleZeptoTrigger = makeTrigger("/price/zepto/api/trigger-manual-scheduler", setIsZeptoTriggering, "Zepto manual scrape triggered! Check progress below.");
   const handleInstamartTrigger = makeTrigger("/price/instamart/api/trigger-manual-scheduler", setIsInstamartTriggering, "Instamart manual scrape triggered! Check progress below.");
+  const handleFlipkartMinutesTrigger = makeTrigger("/price/flipkart-minutes/api/trigger-manual-scheduler", setIsFlipkartMinutesTriggering, "Flipkart Minutes manual scrape triggered! Check progress below.");
 
   const makeCancel = (
     endpoint: string,
@@ -109,6 +114,7 @@ export function useSchedulerData() {
   const handleFlipkartCancel = makeCancel("/sheets/flipkart/api/cancel-manual-scheduler", setIsFlipkartCancelling);
   const handleZeptoCancel = makeCancel("/price/zepto/api/cancel-manual-scheduler", setIsZeptoCancelling);
   const handleInstamartCancel = makeCancel("/price/instamart/api/cancel-manual-scheduler", setIsInstamartCancelling);
+  const handleFlipkartMinutesCancel = makeCancel("/price/flipkart-minutes/api/cancel-manual-scheduler", setIsFlipkartMinutesCancelling);
 
   return {
     cronStatus,
@@ -116,16 +122,19 @@ export function useSchedulerData() {
     flipkartStatus,
     zeptoStatus,
     instamartStatus,
+    flipkartMinutesStatus,
     isTriggering,
     isBlinkitTriggering,
     isFlipkartTriggering,
     isZeptoTriggering,
     isInstamartTriggering,
+    isFlipkartMinutesTriggering,
     isCancelling,
     isBlinkitCancelling,
     isFlipkartCancelling,
     isZeptoCancelling,
     isInstamartCancelling,
+    isFlipkartMinutesCancelling,
     logs,
     toast,
     setToast,
@@ -135,10 +144,12 @@ export function useSchedulerData() {
     handleFlipkartTrigger,
     handleZeptoTrigger,
     handleInstamartTrigger,
+    handleFlipkartMinutesTrigger,
     handleCancel,
     handleBlinkitCancel,
     handleFlipkartCancel,
     handleZeptoCancel,
     handleInstamartCancel,
+    handleFlipkartMinutesCancel,
   };
 }

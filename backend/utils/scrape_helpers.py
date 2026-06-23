@@ -192,3 +192,26 @@ def format_instamart_row(results_by_city: dict) -> list:
     return values
 
 
+FLIPKART_MINUTES_CITIES = [
+    "Bangalore",
+]
+
+def format_flipkart_minutes_row(results_by_city: dict) -> list:
+    """Flatten per-city Flipkart Minutes results into a single sheet row.
+
+    Returns a list of 24 values: [price, mrp, status] × 8 cities in FLIPKART_MINUTES_CITIES order.
+    """
+    values: list[str] = []
+    for city in FLIPKART_MINUTES_CITIES:
+        r = results_by_city.get(city, {})
+        price = r.get("price")
+        mrp = r.get("mrp")
+        status = r.get("status") or ""
+        values.extend([
+            f"{price:.2f}" if price is not None else "",
+            f"{mrp:.2f}" if mrp is not None else "",
+            status,
+        ])
+    return values
+
+

@@ -64,7 +64,8 @@ export function CityInputCard<T extends CityResult>({ t, dark, text, setText, is
           {selectedIds.length > 0
             ? `${selectedIds.length} from sheet + ${parsedCount} pasted`
             : `${parsedCount} product ID(s)`
-          } × {cityCount} cities = {totalIds * cityCount} requests
+          }
+          {cityCount > 1 && ` × ${cityCount} cities = ${totalIds * cityCount} requests`}
         </p>
         <button onClick={onScrape} disabled={isScraping || totalIds === 0}
           className={`${config.buttonClass} px-6 py-3 rounded-xl font-medium text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2`}>

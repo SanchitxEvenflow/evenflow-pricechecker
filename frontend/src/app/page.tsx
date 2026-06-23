@@ -7,11 +7,11 @@ import { Header } from "@/components/layout/Header";
 import { FlipkartManualPage } from "@/components/flipkart/FlipkartManualPage";
 import { CityScrapePage } from "@/components/quick-commerce/CityScrapePage";
 import { SchedulerPage } from "@/components/scheduler/SchedulerPage";
-import { BLINKIT_CITIES, INSTAMART_CITIES, ZEPTO_CITIES } from "@/constants/cities";
+import { BLINKIT_CITIES, INSTAMART_CITIES, ZEPTO_CITIES, FLIPKART_MINUTES_CITIES } from "@/constants/cities";
 import { useHashPage } from "@/hooks/useHashPage";
 import { useTheme } from "@/hooks/useTheme";
-import { blinkitStatusColor, instamartStatusColor, zeptoStatusColor } from "@/lib/status";
-import type { BlinkitResult, CityScrapeConfig, InstamartResult, ZeptoResult } from "@/types/price-scraper";
+import { blinkitStatusColor, instamartStatusColor, zeptoStatusColor, flipkartMinutesStatusColor } from "@/lib/status";
+import type { BlinkitResult, CityScrapeConfig, InstamartResult, ZeptoResult, FlipkartMinutesResult } from "@/types/price-scraper";
 
 const blinkitConfig: CityScrapeConfig<BlinkitResult> = {
   brand: "blinkit",
@@ -73,6 +73,26 @@ const instamartConfig: CityScrapeConfig<InstamartResult> = {
   statusColor: instamartStatusColor,
 };
 
+const flipkartMinutesConfig: CityScrapeConfig<FlipkartMinutesResult> = {
+  brand: "flipkart_minutes",
+  cities: FLIPKART_MINUTES_CITIES,
+  endpoint: "/price/flipkart-minutes/all-cities",
+  filenamePrefix: "fk_minutes",
+  emptyInputError: "Enter at least one product ID",
+  headingBrandClass: "text-[#2874F0]",
+  headingBrandText: "flipkart minutes",
+  headingSuffix: "All Cities Scrape",
+  description: "Paste Flipkart Minutes product IDs (one per line). Scrapes all locations concurrently.",
+  placeholder: "SCMHHUF8MCJY8H4G\n...",
+  focusRingClass: "focus:ring-[#2874F0]/50",
+  buttonClass: "bg-[#2874F0] hover:bg-[#1a5cbd] text-white",
+  buttonText: "Scrape All Cities",
+  resultsTitle: `Results — ${FLIPKART_MINUTES_CITIES.length} Cities`,
+  progressColor: "bg-[#2874F0]",
+  getCellLabel: result => (result.error_message || result.status).replace(/_/g, " "),
+  statusColor: flipkartMinutesStatusColor,
+};
+
 export default function App() {
   const { dark, setDark, t } = useTheme();
   const { page } = useHashPage();
@@ -91,6 +111,8 @@ export default function App() {
         <CityScrapePage key="zepto" t={t} dark={dark} config={zeptoConfig} />
       ) : page === "instamart" ? (
         <CityScrapePage key="instamart" t={t} dark={dark} config={instamartConfig} />
+      ) : page === "flipkart_minutes" ? (
+        <CityScrapePage key="flipkart_minutes" t={t} dark={dark} config={flipkartMinutesConfig} />
       ) : (
         <AmazonManualPage t={t} dark={dark} />
       )}

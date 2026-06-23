@@ -105,7 +105,20 @@ export interface InstamartResult {
   checked_at?: string;
 }
 
-export type PageKey = "home" | "flipkart" | "blinkit" | "zepto" | "instamart" | "scheduler";
+export interface FlipkartMinutesResult {
+  product_id: string;
+  city: string;
+  title?: string | null;
+  price?: number | null;
+  mrp?: number | null;
+  status: string;
+  error_message?: string;
+  is_sold_out?: boolean;
+  url?: string;
+  checked_at?: string;
+}
+
+export type PageKey = "home" | "flipkart" | "blinkit" | "zepto" | "instamart" | "flipkart_minutes" | "scheduler";
 
 export interface ThemeClasses {
   bg: string;
@@ -121,10 +134,10 @@ export interface ThemeClasses {
 
 export type SchedulerToast = { type: string; msg: string };
 
-export type CityResult = BlinkitResult | ZeptoResult | InstamartResult;
+export type CityResult = BlinkitResult | ZeptoResult | InstamartResult | FlipkartMinutesResult;
 
 export interface CityScrapeConfig<T extends CityResult> {
-  brand: "blinkit" | "zepto" | "instamart";
+  brand: "blinkit" | "zepto" | "instamart" | "flipkart_minutes";
   cities: string[];
   endpoint: string;
   filenamePrefix: string;

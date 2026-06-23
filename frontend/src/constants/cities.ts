@@ -12,3 +12,7 @@ export const INSTAMART_CITIES = [
   "Bangalore - HSR", "Gurgaon", "Chennai", "Patna", "Lucknow", 
   "Kochi", "Bangalore - Koramangala", "Ahmedabad", "Hyderabad"
 ];
+
+export const FLIPKART_MINUTES_CITIES = [
+  "Bangalore"
+];
