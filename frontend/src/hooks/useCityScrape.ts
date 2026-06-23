@@ -88,7 +88,7 @@ export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>)
     const hdr = ["Product ID", "Title", ...config.cities.flatMap(c => [`${c} Price`, `${c} MRP`, `${c} Status`])];
     const rows = pids.map(pid => {
       const firstResultWithTitle = Object.values(results[pid] || {}).find(r => r.title);
-      const title = sheetProducts?.find(x => x.id === pid)?.title || firstResultWithTitle?.title || "—";
+      const title = firstResultWithTitle?.title || "—";
       const cells: string[] = [csvEscape(pid), csvEscape(title)];
       config.cities.forEach(c => {
         const r = results[pid]?.[c];

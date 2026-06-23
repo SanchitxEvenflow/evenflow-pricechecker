@@ -134,24 +134,20 @@ def _extract_product_from_layout(json_data: dict) -> dict:
     else:
         status = "available"
 
-    # Title (priority: cart_item > tracking > snippets)
+    # Title: extract from the product name widget only.
+    # "text_right_icons_rating_snippet_type" is the widget Blinkit renders
+    # the product display name in (confirmed via API inspection).
+    # cart_item and tracking fallbacks are excluded — they return variant/canonical
+    # names that don't match the queried product.
     title = None
-    if cart_item:
-        title = cart_item.get("product_name") or cart_item.get("display_name")
-    if not title and tracking_block:
-        widget_meta = tracking_block.get("widget_meta", {})
-        title = widget_meta.get("widget_title")
-    if not title:
-        snippets = response_obj.get("snippets")
-        if snippets and isinstance(snippets, list):
-            for snip in snippets:
-                snip_data = snip.get("data", {})
-                title_obj = snip_data.get("title")
-                if isinstance(title_obj, dict) and title_obj.get("text"):
-                    candidate = title_obj["text"]
-                    if len(candidate) > 10:
-                        title = candidate
-                        break
+    snippets = response_obj.get("snippets")
+    if snippets and isinstance(snippets, list):
+        for snip in snippets:
+            if snip.get("widget_type") == "text_right_icons_rating_snippet_type":
+                title_obj = snip.get("data", {}).get("title")
+                if isinstance(title_obj, dict):
+                    title = title_obj.get("text") or None
+                break
 
     # Prices (priority: cart_item numeric > text parsing)
     current_price = None
