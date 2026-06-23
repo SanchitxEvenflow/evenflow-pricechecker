@@ -1,11 +1,12 @@
 import type { CityResult, CityScrapeConfig, ThemeClasses } from "@/types/price-scraper";
 
-export function CityResultsMatrix<T extends CityResult>({ t, results, orderedIds, config, onDownloadCSV }: {
+export function CityResultsMatrix<T extends CityResult>({ t, results, orderedIds, config, onDownloadCSV, sheetProducts = [] }: {
   t: ThemeClasses;
   results: Record<string, Record<string, T>>;
   orderedIds?: string[];
   config: CityScrapeConfig<T>;
   onDownloadCSV: () => void;
+  sheetProducts?: import("@/components/shared/ProductPicker").SheetProduct[];
 }) {
   const pids = orderedIds && orderedIds.length > 0 ? orderedIds : Object.keys(results);
   if (pids.length === 0) return null;
@@ -33,7 +34,8 @@ export function CityResultsMatrix<T extends CityResult>({ t, results, orderedIds
           <tbody className={`divide-y ${t.border}`}>
             {pids.map(pid => {
               const firstResultWithTitle = Object.values(results[pid] || {}).find(r => r.title);
-              const title = firstResultWithTitle?.title || "—";
+              const sheetTitle = sheetProducts?.find((x: any) => x.id === pid)?.title;
+              const title = sheetTitle || firstResultWithTitle?.title || "—";
               return (
               <tr key={pid} className="transition-colors">
                 <td className={`w-40 min-w-[160px] max-w-[160px] px-4 py-3 whitespace-normal break-all text-sm font-medium font-mono sticky left-0 ${t.card} z-10 align-top shadow-[1px_0_0_var(--tw-shadow-color)] shadow-neutral-800`}>{pid}</td>
