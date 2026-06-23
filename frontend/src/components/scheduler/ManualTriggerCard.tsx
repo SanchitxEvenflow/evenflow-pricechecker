@@ -45,6 +45,14 @@ const triggerConfig = {
     description: "Run a full scrape of all PIDs from the Instamart Google Sheet across all 8 cities. Results are written to a new tab:",
     code: "Instamart_Manual_YYYY-MM-DD_HH-MM",
   },
+  flipkart_minutes: {
+    color: "bg-[#2874F0] hover:bg-[#1a5dc8] text-white",
+    bar: "bg-[#2874F0]",
+    brandClass: "text-[#2874F0]",
+    name: "Flipkart Minutes",
+    description: "Run a full scrape of all PIDs from the Flipkart Minutes Google Sheet. Results are written to a new tab:",
+    code: "Flipkart_Minutes_Manual_YYYY-MM-DD_HH-MM",
+  },
 };
 
 // Google Sheets icon (simplified)

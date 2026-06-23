@@ -14,6 +14,7 @@ export function useHashPage() {
       else if (h === "#/blinkit") setPage("blinkit");
       else if (h === "#/zepto") setPage("zepto");
       else if (h === "#/instamart") setPage("instamart");
+      else if (h === "#/flipkart-minutes") setPage("flipkart_minutes");
       else setPage("home");
     };
     onHash();

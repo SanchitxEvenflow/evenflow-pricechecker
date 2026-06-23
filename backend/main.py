@@ -40,6 +40,7 @@ from flipkart.routes import sheets_router as flipkart_sheets_router
 from blinkit.routes import router as blinkit_router
 from zepto.routes import router as zepto_router
 from instamart.routes import router as instamart_router
+from flipkart_minutes.routes import router as flipkart_minutes_router
 from scheduler import setup_scheduler
 from schemas.price import (
     AmazonResponse,
@@ -200,12 +201,23 @@ async def lifespan(app: FastAPI):
         "progress": None,
         "error": None,
     }
+    app.state.flipkart_minutes_cron_status = {
+        "is_running": False,
+        "last_run_at": None,
+        "last_run_tab": None,
+        "last_run_duration_seconds": None,
+        "last_run_processed": None,
+        "total": None,
+        "progress": None,
+        "error": None,
+    }
 
     app.state.cron_task = None
     app.state.blinkit_cron_task = None
     app.state.flipkart_cron_task = None
     app.state.zepto_cron_task = None
     app.state.instamart_cron_task = None
+    app.state.flipkart_minutes_cron_task = None
 
     app.state.cron_scheduler = setup_scheduler(app)
     if app.state.cron_scheduler:
@@ -333,6 +345,7 @@ app.include_router(flipkart_sheets_router)
 app.include_router(blinkit_router, prefix="/price", tags=["blinkit"])
 app.include_router(zepto_router, prefix="/price", tags=["zepto"])
 app.include_router(instamart_router, prefix="/price", tags=["instamart"])
+app.include_router(flipkart_minutes_router, prefix="/price", tags=["flipkart_minutes"])
 
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
@@ -367,6 +380,7 @@ async def get_config():
             "blinkit":   sheet_url(os.getenv("BLINKIT_SHEET_ID", "")),
             "zepto":     sheet_url(os.getenv("ZEPTO_SHEET_ID", "")),
             "instamart": sheet_url(os.getenv("INSTAMART_SHEET_ID", "")),
+            "flipkart_minutes": sheet_url(os.getenv("FLIPKART_MINUTES_SHEET_ID", "")),
         }
     }
 
@@ -380,6 +394,7 @@ async def get_all_cron_status(request: Request):
         "blinkit": dict(getattr(request.app.state, "blinkit_cron_status", {})),
         "zepto": dict(getattr(request.app.state, "zepto_cron_status", {})),
         "instamart": dict(getattr(request.app.state, "instamart_cron_status", {})),
+        "flipkart_minutes": dict(getattr(request.app.state, "flipkart_minutes_cron_status", {})),
     }
 
 @app.get("/health", response_model=HealthResponse)

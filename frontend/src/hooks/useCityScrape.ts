@@ -83,8 +83,8 @@ export function useCityScrape<T extends CityResult>(config: CityScrapeConfig<T>)
               let newSuc = 0;
               let newFail = 0;
               let newDone = 0;
-              Object.values(next).forEach(row => {
-                Object.values(row).forEach(cell => {
+              Object.values(next).forEach((row: any) => {
+                Object.values(row).forEach((cell: any) => {
                   if (cell.status === "error") newFail++;
                   else if (cell.status && cell.status !== "pending") newSuc++;
                   

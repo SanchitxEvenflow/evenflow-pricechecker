@@ -191,3 +191,31 @@ class InstamartCityResult(BaseModel):
 class InstamartResponse(InstamartCityResult):
     pass
 
+
+# ── Flipkart Minutes Models ──────────────────────────────────────────────────
+
+class FlipkartMinutesRequest(BaseModel):
+    product_id: str
+    city: str
+
+
+class FlipkartMinutesAllCitiesRequest(BaseModel):
+    product_ids: list[str]
+
+
+class FlipkartMinutesCityResult(BaseModel):
+    product_id: str
+    city: str
+    title: str | None = None
+    price: float | None = None
+    mrp: float | None = None
+    status: str
+    is_sold_out: bool = False
+    url: str
+    checked_at: str
+    error_message: str | None = None
+
+
+class FlipkartMinutesResponse(FlipkartMinutesCityResult):
+    pass
+

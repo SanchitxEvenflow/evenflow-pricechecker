@@ -25,13 +25,14 @@ export function RunHistoryTable({ t, logs, onRefresh, formatDate }: { t: ThemeCl
                 <td className="px-6 py-3 whitespace-nowrap text-sm">
                   <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${
                     log.type === "manual" ? "bg-purple-500/10 text-purple-500" :
-                    log.type === "blinkit_manual" ? "bg-yellow-500/10 text-yellow-500" :
-                    log.type === "zepto_manual" ? "bg-pink-500/10 text-pink-500" :
-                    log.type === "instamart_manual" ? "bg-orange-500/10 text-orange-500" :
+                    log.type === "blinkit_manual" ? "bg-[#F8CB46]/10 text-[#F8CB46]" :
+                    log.type === "zepto_manual" ? "bg-[#FF3269]/10 text-[#FF3269]" :
+                    log.type === "instamart_manual" ? "bg-[#FC8019]/10 text-[#FC8019]" :
+                    log.type === "flipkart_minutes_manual" ? "bg-[#2874F0]/10 text-[#2874F0]" :
                     log.type === "flipkart_manual" ? "bg-blue-500/10 text-blue-500" :
                     "bg-cyan-500/10 text-cyan-500"
                   }`}>
-                    {log.type === "manual" ? "Amazon" : log.type === "blinkit_manual" ? "Blinkit" : log.type === "zepto_manual" ? "Zepto" : log.type === "instamart_manual" ? "Instamart" : log.type === "flipkart_manual" ? "Flipkart" : "Auto"}
+                    {log.type === "manual" ? "Amazon" : log.type === "blinkit_manual" ? "Blinkit" : log.type === "zepto_manual" ? "Zepto" : log.type === "instamart_manual" ? "Instamart" : log.type === "flipkart_manual" ? "Flipkart" : log.type === "flipkart_minutes_manual" ? "FK Minutes" : "Auto"}
                   </span>
                 </td>
                 <td className={`px-6 py-3 whitespace-nowrap text-sm ${t.muted}`}>{formatDate(log.triggered_at)}</td>

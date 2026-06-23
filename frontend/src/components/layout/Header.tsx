@@ -31,6 +31,9 @@ export function Header({ dark, setDark, page }: { dark: boolean; setDark: Dispat
           <a href="#/instamart" className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${page === "instamart" ? "bg-[#FC8019] text-white" : "bg-neutral-800 hover:bg-neutral-700 text-white"}`}>
             Instamart
           </a>
+          <a href="#/flipkart-minutes" className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${page === "flipkart_minutes" ? "bg-[#2874F0] text-white" : "bg-neutral-800 hover:bg-neutral-700 text-white"}`}>
+            FK Minutes
+          </a>
           <a href="#/scheduler" className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${page === "scheduler" ? "bg-[#FF9900] text-black" : "bg-neutral-800 hover:bg-neutral-700 text-white"}`}>
             Scheduler
           </a>

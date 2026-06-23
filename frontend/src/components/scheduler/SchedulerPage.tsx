@@ -19,6 +19,7 @@ export function SchedulerPage({ t, dark }: { t: ThemeClasses; dark: boolean }) {
       <ManualTriggerCard t={t} dark={dark} brand="flipkart" status={scheduler.flipkartStatus} isTriggering={scheduler.isFlipkartTriggering} onTrigger={scheduler.handleFlipkartTrigger} onCancel={scheduler.handleFlipkartCancel} isCancelling={scheduler.isFlipkartCancelling} />
       <ManualTriggerCard t={t} dark={dark} brand="zepto" status={scheduler.zeptoStatus} isTriggering={scheduler.isZeptoTriggering} onTrigger={scheduler.handleZeptoTrigger} onCancel={scheduler.handleZeptoCancel} isCancelling={scheduler.isZeptoCancelling} />
       <ManualTriggerCard t={t} dark={dark} brand="instamart" status={scheduler.instamartStatus} isTriggering={scheduler.isInstamartTriggering} onTrigger={scheduler.handleInstamartTrigger} onCancel={scheduler.handleInstamartCancel} isCancelling={scheduler.isInstamartCancelling} />
+      <ManualTriggerCard t={t} dark={dark} brand="flipkart_minutes" status={scheduler.flipkartMinutesStatus} isTriggering={scheduler.isFlipkartMinutesTriggering} onTrigger={scheduler.handleFlipkartMinutesTrigger} onCancel={scheduler.handleFlipkartMinutesCancel} isCancelling={scheduler.isFlipkartMinutesCancelling} />
       <SchedulerStatusCard t={t} cronStatus={scheduler.cronStatus} formatDate={formatIndiaDate} />
       <RunHistoryTable t={t} logs={scheduler.logs} onRefresh={scheduler.fetchLogs} formatDate={formatIndiaDate} />
     </main>
