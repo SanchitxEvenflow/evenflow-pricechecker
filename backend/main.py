@@ -122,7 +122,6 @@ async def lifespan(app: FastAPI):
         "--disable-dev-shm-usage",
         "--disable-gpu",
         "--no-zygote",
-        "--single-process",
         "--disable-blink-features=AutomationControlled",
         "--disable-infobars",
         "--window-size=1920,1080",
@@ -446,7 +445,7 @@ async def check_both_prices(body: BothRequest, request: Request):
     # Run each scraper sequentially under its own semaphore slot to avoid holding
     # two browser slots simultaneously, which would halve effective concurrency.
     async with sem_with_timeout(request.app.state.total_sem):
-        amazon_result = await scrape_amazon(body.asin, get_browser(request.app.state), proxy_manager, skip_curl=True)
+        amazon_result = await scrape_amazon(body.asin, get_browser(request.app.state), proxy_manager, skip_curl=True, browser_manager=request.app.state.browser_manager)
     amazon_cookies = amazon_result.pop("_cookies", {}) or {}
     if amazon_cookies:
         curl_data = await fetch_curl_supplement(body.asin, amazon_cookies)

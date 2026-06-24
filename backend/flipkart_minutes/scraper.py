@@ -37,9 +37,17 @@ _BASE_HEADERS = {
 }
 
 
-def _rome_fetch(pid: str, cookie_str: str) -> dict:
-    """POST to Rome API and return parsed JSON."""
-    body = {"pageUri": f"/product/p/itme?pid={pid}&marketplace=HYPERLOCAL"}
+def _rome_fetch(pid: str, cookie_str: str, hyperlocal: bool = True) -> dict:
+    """POST to Rome API and return parsed JSON.
+
+    Args:
+        hyperlocal: If True, appends &marketplace=HYPERLOCAL (Flipkart Minutes
+                    inventory). If False, uses the regular Flipkart marketplace —
+                    used as a fallback when a product exists on FK but hasn't yet
+                    propagated to the hyperlocal seller network.
+    """
+    suffix = "&marketplace=HYPERLOCAL" if hyperlocal else ""
+    body = {"pageUri": f"/product/p/itme?pid={pid}{suffix}"}
     resp = cffi.post(
         ROME_ENDPOINT,
         json=body,
@@ -49,6 +57,15 @@ def _rome_fetch(pid: str, cookie_str: str) -> dict:
     )
     resp.raise_for_status()
     return resp.json()
+
+
+def _has_price_widget(data: dict) -> bool:
+    """Return True if the Rome response contains a PRODUCT_PRICE_SUMMARY widget."""
+    slots = data.get("RESPONSE", {}).get("slots", [])
+    return any(
+        slot.get("widget", {}).get("type") == "PRODUCT_PRICE_SUMMARY"
+        for slot in slots
+    )
 
 
 def _is_302(data: dict) -> bool:
@@ -123,8 +140,15 @@ async def fetch_flipkart_minutes_data(
     """
     Fetch FK Minutes price for a single product via Rome API.
 
-    Uses `app_state.fkm_cookies` for auth. On Rome 302 (location cookie stale),
-    acquires `app_state.fkm_cookie_lock`, refreshes once, then retries.
+    Strategy:
+      1. Try HYPERLOCAL marketplace (Flipkart Minutes inventory).
+      2. If HYPERLOCAL returns no PRODUCT_PRICE_SUMMARY widget (product exists on
+         regular FK but hasn't propagated to the hyperlocal network yet), fall back
+         to a regular Flipkart call. The result is marked source="flipkart" so the
+         UI/sheets layer can distinguish the two cases.
+
+    On Rome 302 (location cookie stale), acquires fkm_cookie_lock, refreshes once,
+    then retries the same call.
     """
     checked_at = datetime.now(IST).isoformat()
     url = f"https://www.flipkart.com/product/p/itme?pid={pid}&marketplace=HYPERLOCAL"
@@ -138,6 +162,7 @@ async def fetch_flipkart_minutes_data(
             "mrp": None,
             "status": "error",
             "is_sold_out": False,
+            "source": "hyperlocal",
             "url": url,
             "checked_at": checked_at,
             "error_message": msg,
@@ -153,7 +178,7 @@ async def fetch_flipkart_minutes_data(
     for attempt in range(4):
         try:
             data = await asyncio.get_event_loop().run_in_executor(
-                None, _rome_fetch, pid, cookie_str
+                None, _rome_fetch, pid, cookie_str, True  # HYPERLOCAL
             )
         except Exception as e:
             logger.warning("[FKM] Rome request error pid=%s attempt=%d: %s", pid, attempt, e)
@@ -178,18 +203,40 @@ async def fetch_flipkart_minutes_data(
             refreshed = True
             continue
 
+        # ── Fallback: HYPERLOCAL returned no price widget ─────────────────────
+        # This happens when a product exists on regular Flipkart but hasn't yet
+        # propagated into the hyperlocal seller network (common during onboarding).
+        # We retry without marketplace=HYPERLOCAL to get the regular FK price.
+        if not _has_price_widget(data):
+            logger.info(
+                "[FKM] pid=%s — no price widget in HYPERLOCAL response, falling back to regular FK",
+                pid,
+            )
+            try:
+                data = await asyncio.get_event_loop().run_in_executor(
+                    None, _rome_fetch, pid, cookie_str, False  # regular FK
+                )
+            except Exception as e:
+                logger.warning("[FKM] FK fallback request error pid=%s: %s", pid, e)
+                return _err(f"No hyperlocal price and fallback failed: {e}")
+            source = "flipkart"
+        else:
+            source = "hyperlocal"
+
         price, mrp, title, in_stock = _extract(data)
 
         if price is None:
             status = "out_of_stock"
-        elif not in_stock:
-            status = "out_of_stock"
         else:
+            # Price present → treat as available.
+            # PRODUCT_ACTION_EXTENDED.valid is unreliable in Rome responses
+            # (often absent even for in-stock items), so we trust price as the
+            # primary availability signal.
             status = "available"
 
         logger.info(
-            "[FKM] pid=%s city=%s price=%s mrp=%s status=%s",
-            pid, city, price, mrp, status,
+            "[FKM] pid=%s city=%s price=%s mrp=%s status=%s source=%s",
+            pid, city, price, mrp, status, source,
         )
         return {
             "product_id": pid,
@@ -199,6 +246,7 @@ async def fetch_flipkart_minutes_data(
             "mrp": mrp,
             "status": status,
             "is_sold_out": status == "out_of_stock",
+            "source": source,
             "url": url,
             "checked_at": checked_at,
             "error_message": None,

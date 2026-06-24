@@ -1,13 +1,11 @@
 """
-Flipkart.in two-step price scraper using Playwright async API.
+Flipkart.in price scraper — Rome API first, Playwright fallback.
 
-Step A: FSN → resolve to public product URL (follows redirects)
-Step B: Resolved page → scrape price, rating, rating count
-
-Extraction strategy (in priority order):
-  1. JSON-LD structured data (schema.org Product) — most reliable
-  2. JavaScript evaluation on live DOM — catches dynamic content
-  3. CSS selector fallbacks — legacy + newer class names
+Strategy (in priority order):
+  1. Rome API via curl_cffi (no browser, ~1-2s) — price, rating, seller from JSON
+  2. Playwright browser scrape (slow path, used only when Rome fails/blocks)
+     Step A: FSN → resolve to public product URL (follows redirects)
+     Step B: Resolved page → scrape via JSON-LD → JS evaluation → CSS selectors
 """
 
 import asyncio
@@ -20,6 +18,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 
+from curl_cffi import requests as cffi
 from dotenv import load_dotenv
 from playwright.async_api import Browser
 
@@ -86,7 +85,7 @@ def _get_cached_url(fsn: str) -> str | None:
 def _cache_url(fsn: str, resolved_url: str) -> None:
     """Cache resolved URL for FSN with size limit to prevent memory leaks."""
     global _resolved_url_cache
-    
+
     # Evict 10% of oldest entries if cache exceeds max size
     if len(_resolved_url_cache) >= _CACHE_MAX_SIZE:
         evict_count = _CACHE_MAX_SIZE // 10
@@ -94,9 +93,126 @@ def _cache_url(fsn: str, resolved_url: str) -> None:
         for key in old_keys:
             del _resolved_url_cache[key]
         logger.debug("Cache evicted %d entries (cache size: %d)", evict_count, len(_resolved_url_cache))
-    
+
     _resolved_url_cache[fsn] = resolved_url
     logger.debug("Cached resolved URL for FSN %s: %s", fsn, resolved_url)
+
+
+# ── Rome API fast path (no Playwright) ──────────────────────────────────────
+
+_ROME_ENDPOINT = "https://1.rome.api.flipkart.com/api/4/page/fetch?cacheFirst=false"
+_ROME_CHROME_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+)
+_ROME_MSITE_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/122.0.0.0 Safari/537.36 FKUA/msite/0.0.4/msite/Mobile"
+)
+_ROME_HEADERS = {
+    "accept": "*/*",
+    "accept-language": "en-IN",
+    "content-type": "application/json",
+    "origin": "https://www.flipkart.com",
+    "referer": "https://www.flipkart.com/",
+    "user-agent": _ROME_CHROME_UA,
+    "x-user-agent": _ROME_MSITE_UA,
+    "flipkart_secure": "true",
+}
+
+
+def _rome_fetch_fk(fsn: str) -> dict:
+    """POST to Rome API for a regular Flipkart product (no cookies required)."""
+    resp = cffi.post(
+        _ROME_ENDPOINT,
+        json={"pageUri": f"/product/p/itme?pid={fsn}"},
+        headers=_ROME_HEADERS,
+        impersonate="chrome124",
+        timeout=15,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _extract_from_rome(data: dict) -> dict | None:
+    """
+    Extract price, mrp, rating, rating_count, fulfilled_by from a Rome API response.
+    Returns None if no PRODUCT_PRICE_SUMMARY widget is present (product unavailable
+    or Rome returned an incomplete page — caller should fall back to Playwright).
+
+    Confirmed widget paths from live responses:
+      price        → PRODUCT_PRICE_SUMMARY.data.pricing.value.finalPrice.value
+      mrp          → PRODUCT_PRICE_SUMMARY.data.pricing.value.prices[0].value
+      rating       → RATING_SUMMARY.data.ratingsAndReviews.value.rating.average
+      rating_count → RATING_SUMMARY.data.ratingsAndReviews.value.rating.count
+      fulfilled_by → SELLER_V2.data.SellerMetaValue.value.name
+    """
+    slots = data.get("RESPONSE", {}).get("slots", [])
+    price: float | None = None
+    mrp: float | None = None
+    rating: str | None = None
+    rating_count: str | None = None
+    fulfilled_by: str | None = None
+    has_price_widget = False
+
+    for slot in slots:
+        widget = slot.get("widget", {})
+        wtype = widget.get("type", "")
+        wd = widget.get("data", {}) or {}
+
+        if wtype == "PRODUCT_PRICE_SUMMARY":
+            has_price_widget = True
+            pv = wd.get("pricing", {}).get("value", {})
+            raw_price = pv.get("finalPrice", {}).get("value")
+            if raw_price is not None:
+                try:
+                    price = float(raw_price)
+                except (TypeError, ValueError):
+                    pass
+            prices_list = pv.get("prices", [])
+            if prices_list:
+                raw_mrp = prices_list[0].get("value")
+                if raw_mrp is not None:
+                    try:
+                        mrp = float(raw_mrp)
+                    except (TypeError, ValueError):
+                        pass
+
+        elif wtype == "RATING_SUMMARY":
+            rv = wd.get("ratingsAndReviews", {}).get("value", {})
+            r = rv.get("rating", {})
+            avg = r.get("average")
+            if avg is not None:
+                rating = str(avg)
+            cnt = r.get("count")
+            if cnt is not None:
+                rating_count = str(cnt)
+
+        elif wtype == "SELLER_V2":
+            sv = wd.get("SellerMetaValue", {}).get("value", {})
+            name = sv.get("name")
+            if name:
+                fulfilled_by = name
+
+    if not has_price_widget:
+        return None  # signal caller to fall back to Playwright
+
+    # Format price as ₹ string to match existing Playwright output contract
+    def _fmt(val: float | None) -> str:
+        if val is None:
+            return ""
+        # e.g. 1299 → "₹1,299"
+        return f"\u20b9{val:,.0f}"
+
+    return {
+        "price": _fmt(price),
+        "mrp": _fmt(mrp) if mrp else None,
+        "rating": rating,
+        "rating_count": rating_count,
+        "fulfilled_by": fulfilled_by,
+        "status": "available" if price else "unavailable",
+    }
 
 
 # ── JavaScript extraction snippets ──────────────────────────────────────────
@@ -238,15 +354,47 @@ JS_EXTRACT_ALL = r"""
 
 async def scrape_flipkart(fsn: str, browser: Browser, proxy_manager: ProxyManager) -> dict:
     """
-    Two-step Flipkart scraper:
-      Step A: Resolve FSN → canonical product URL (with redirect capture)
-      Step B: Scrape buyer-facing page for price, rating, rating count
+    Flipkart scraper — Rome API first, Playwright fallback.
 
-    Extraction uses JSON-LD first, then JS DOM evaluation, then CSS selectors.
+    Fast path: curl_cffi POST to Rome API (no browser, ~1-2s).
+    Slow path: Playwright two-step (resolve FSN URL → scrape page) used only
+               when Rome fails, is blocked, or returns no price widget.
+
     Always returns a dict — never raises exceptions to the caller.
     """
-    cached_url = _get_cached_url(fsn)
     fsn_url = _build_fsn_url(fsn)
+    checked_at = datetime.now(IST).isoformat()
+
+    # ── Fast path: Rome API ──────────────────────────────────────────────────
+    try:
+        rome_data = await asyncio.get_event_loop().run_in_executor(
+            None, _rome_fetch_fk, fsn
+        )
+        extracted = _extract_from_rome(rome_data)
+        if extracted is not None:
+            logger.info(
+                "[FK-Rome] FSN %s: price=%s rating=%s fulfilled_by=%s",
+                fsn, extracted["price"], extracted["rating"], extracted["fulfilled_by"],
+            )
+            return {
+                "fsn": fsn,
+                "price": extracted["price"],
+                "mrp": extracted.get("mrp"),
+                "rating": extracted["rating"],
+                "rating_count": extracted["rating_count"],
+                "fulfilled_by": extracted["fulfilled_by"],
+                "status": extracted["status"],
+                "platform": "flipkart",
+                "url": fsn_url,
+                "resolved_url": fsn_url,
+                "checked_at": checked_at,
+            }
+        logger.info("[FK-Rome] FSN %s — no price widget, falling back to Playwright", fsn)
+    except Exception as e:
+        logger.warning("[FK-Rome] FSN %s — Rome failed (%s), falling back to Playwright", fsn, e)
+
+    # ── Slow path: Playwright ────────────────────────────────────────────────
+    cached_url = _get_cached_url(fsn)
     start_url = cached_url if cached_url else fsn_url
 
     max_proxy_attempts = min(3, len(proxy_manager.active_pool) or 1)

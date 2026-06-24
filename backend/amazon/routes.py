@@ -37,7 +37,7 @@ async def check_amazon_price(body: AmazonRequest, request: Request):
     else:
         proxy_manager = request.app.state.proxy_manager
         async with sem_with_timeout(request.app.state.total_sem):
-            result = await scrape_amazon(body.asin, get_browser(request.app.state), proxy_manager, skip_curl=True)
+            result = await scrape_amazon(body.asin, get_browser(request.app.state), proxy_manager, skip_curl=True, browser_manager=request.app.state.browser_manager)
         cookies = result.pop("_cookies", {}) or {}
         if cookies:
             curl_data = await fetch_curl_supplement(body.asin, cookies)
@@ -104,7 +104,7 @@ _format_update = format_update
 
 async def _scrape_with_sem(asin: str, row: int, app_state, proxy_manager) -> dict:
     async with batch_context(app_state):
-        result = await scrape_amazon(asin, get_browser(app_state), proxy_manager, skip_curl=True)
+        result = await scrape_amazon(asin, get_browser(app_state), proxy_manager, skip_curl=True, browser_manager=app_state.browser_manager)
         result["row"] = row
     cookies = result.pop("_cookies", {}) or {}
     if cookies:
@@ -293,7 +293,7 @@ async def scrape_batch_stream(
 
     async def worker(row_data: dict) -> None:
         async with batch_context(app_state):
-            result = await scrape_amazon(row_data["asin"], get_browser(app_state), proxy_manager, skip_curl=True)
+            result = await scrape_amazon(row_data["asin"], get_browser(app_state), proxy_manager, skip_curl=True, browser_manager=app_state.browser_manager)
             result["row"] = row_data["row"]
         try:
             cookies = result.pop("_cookies", {}) or {}
@@ -395,7 +395,7 @@ async def scrape_manual(body: ManualScrapeRequest, request: Request):
             result = cache[cache_key].copy()
         else:
             async with batch_context(app_state):
-                result = await scrape_amazon(asin, get_browser(app_state), proxy_manager, skip_curl=True)
+                result = await scrape_amazon(asin, get_browser(app_state), proxy_manager, skip_curl=True, browser_manager=app_state.browser_manager)
             try:
                 cookies = result.pop("_cookies", {}) or {}
                 if cookies:

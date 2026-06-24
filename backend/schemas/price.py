@@ -211,6 +211,7 @@ class FlipkartMinutesCityResult(BaseModel):
     mrp: float | None = None
     status: str
     is_sold_out: bool = False
+    source: str = "hyperlocal"  # "hyperlocal" = FK Minutes inventory, "flipkart" = regular FK fallback
     url: str
     checked_at: str
     error_message: str | None = None

@@ -112,7 +112,7 @@ async def _run_full_scrape(app, tab_prefix: str, run_type: str, write_historical
 
         async def scrape_one(row_data: dict) -> dict:
             async with batch_context(app.state):
-                result = await scrape_amazon(row_data["asin"], get_browser(app.state), proxy_manager, skip_curl=True)
+                result = await scrape_amazon(row_data["asin"], get_browser(app.state), proxy_manager, skip_curl=True, browser_manager=app.state.browser_manager)
                 result["row"] = row_data["row"]
             # semaphore released — curl runs here, overlapping with the next ASIN's Playwright scrape
             cookies = result.pop("_cookies", {}) or {}

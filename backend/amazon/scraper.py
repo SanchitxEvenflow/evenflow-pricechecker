@@ -13,6 +13,7 @@ from bs4 import BeautifulSoup
 from curl_cffi import requests as curl_requests
 from dotenv import load_dotenv
 from playwright.async_api import Browser
+from playwright._impl._errors import TargetClosedError
 
 from proxy.manager import ProxyManager
 from utils.headers import UA_POOL
@@ -434,11 +435,19 @@ def merge_curl_supplement(result: dict, curl_data: dict) -> None:
             result[field] = curl_data[field]
 
 
-async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager, skip_curl: bool = False) -> dict:
+async def scrape_amazon(
+    asin: str,
+    browser: Browser,
+    proxy_manager: ProxyManager,
+    skip_curl: bool = False,
+    browser_manager=None,  # BrowserPoolManager — passed so dead browsers can be reported
+) -> dict:
     """
     Scrape Amazon.in product page for price data using a real Playwright browser context.
 
-    Tries up to min(5, pool_size) proxies then falls back to a direct connection.
+    Tries up to min(3, proxy_pool_size) proxies then falls back to a direct connection.
+    If the browser has crashed (TargetClosedError), notifies the pool manager to recycle
+    it and returns an error immediately — no point retrying on a dead browser.
     Always returns a dict — never raises exceptions to the caller.
     """
     url = f"https://www.amazon.in/dp/{asin}?th=1"
@@ -595,6 +604,26 @@ async def scrape_amazon(asin: str, browser: Browser, proxy_manager: ProxyManager
             if skip_curl:
                 result["_cookies"] = cookie_dict
             return result
+
+        except TargetClosedError as e:
+            # The Chromium browser process has crashed. Retrying on the same browser
+            # will always fail — notify the pool so it recycles this slot, then
+            # give up on this ASIN so we don't spam dead-browser errors.
+            logger.error(
+                "Amazon scrape ASIN %s (attempt %d): browser crashed (TargetClosedError) — "
+                "notifying pool to recycle and skipping remaining retries",
+                asin, attempt + 1,
+            )
+            if browser_manager is not None:
+                browser_manager.notify_dead(browser)
+            await _safe_close_context(context)
+            context = None
+            return {
+                **_empty,
+                "status": "error",
+                "message": "Browser crashed — will retry on next run",
+                "checked_at": datetime.now(IST).isoformat(),
+            }
 
         except Exception as e:
             logger.exception("Amazon scrape error for ASIN %s (attempt %d): %s", asin, attempt + 1, str(e))
