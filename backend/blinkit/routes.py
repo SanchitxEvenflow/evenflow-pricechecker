@@ -86,7 +86,7 @@ async def check_blinkit_all_cities(body: BlinkitAllCitiesRequest, request: Reque
             yield f"data: {json.dumps({'done': True, 'total': 0})}\n\n"
         return StreamingResponse(empty_stream(), media_type="text/event-stream")
 
-    async def worker(product_id: str, loc: dict) -> dict:
+    async def worker(product_id: str, loc: dict, fallback_title: str | None = None) -> dict:
         cache = getattr(request.app.state, "cache", None)
         cache_key = f"blinkit_{product_id}_{loc['name']}"
 
@@ -111,6 +111,9 @@ async def check_blinkit_all_cities(body: BlinkitAllCitiesRequest, request: Reque
             except Exception:
                 logger.exception("blinkit worker error for %s %s", product_id, loc["name"])
                 return {"product_id": product_id, "city": loc["name"], "status": "error"}
+
+            if not result.get("title") and fallback_title:
+                result["title"] = fallback_title
 
             if cache is not None and result.get("status") not in ("error", "invalid_format"):
                 cache[cache_key] = result.copy()
