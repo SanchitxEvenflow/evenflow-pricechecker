@@ -4,13 +4,14 @@ import logging
 logger = logging.getLogger(__name__)
 
 class BrowserPoolManager:
-    def __init__(self, playwright_instance, pool_size: int, headless: bool, args: list[str], max_requests: int = 500):
+    def __init__(self, playwright_instance, pool_size: int, headless: bool, args: list[str], max_requests: int = 500, executable_path: str | None = None):
         self.playwright = playwright_instance
         self.pool_size = pool_size
         self.headless = headless
         self.args = args
         self.max_requests = max_requests
-        
+        self.executable_path = executable_path
+
         self.browsers = []
         self.usage = []
         self._index = 0
@@ -19,7 +20,18 @@ class BrowserPoolManager:
     async def launch_all(self):
         for i in range(self.pool_size):
             try:
-                b = await self.playwright.chromium.launch(headless=self.headless, args=self.args)
+                logger.info(
+                    "BrowserPool: launching %d/%d | exe=%s | headless=%s | args=%s",
+                    i + 1, self.pool_size,
+                    self.executable_path or "(playwright bundled)",
+                    self.headless,
+                    self.args,
+                )
+                b = await self.playwright.chromium.launch(
+                    headless=self.headless,
+                    args=self.args,
+                    executable_path=self.executable_path,
+                )
                 self.browsers.append(b)
                 self.usage.append(0)
                 logger.info("BrowserPool: Browser %d/%d launched", i + 1, self.pool_size)
@@ -46,7 +58,11 @@ class BrowserPoolManager:
     async def _recycle(self, idx: int, old_b):
         try:
             async with self._lock:
-                new_b = await self.playwright.chromium.launch(headless=self.headless, args=self.args)
+                new_b = await self.playwright.chromium.launch(
+                    headless=self.headless,
+                    args=self.args,
+                    executable_path=self.executable_path,
+                )
                 self.browsers[idx] = new_b
                 logger.info("BrowserPool: Successfully launched replacement browser for index %d", idx)
 

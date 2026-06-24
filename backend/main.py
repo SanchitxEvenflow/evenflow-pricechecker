@@ -114,9 +114,15 @@ async def lifespan(app: FastAPI):
 
     # Launch Playwright browser pool
     headless = os.getenv("PLAYWRIGHT_HEADLESS", "true").lower() == "true"
+    _playwright_exe = os.getenv("PLAYWRIGHT_EXECUTABLE_PATH") or None
     playwright_instance = None
     _browser_args = [
         "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--no-zygote",
+        "--single-process",
         "--disable-blink-features=AutomationControlled",
         "--disable-infobars",
         "--window-size=1920,1080",
@@ -128,7 +134,7 @@ async def lifespan(app: FastAPI):
 
         playwright_instance = await async_playwright().start()
         
-        app.state.browser_manager = BrowserPoolManager(playwright_instance, BROWSER_POOL_SIZE, headless, _browser_args, max_requests=500)
+        app.state.browser_manager = BrowserPoolManager(playwright_instance, BROWSER_POOL_SIZE, headless, _browser_args, max_requests=500, executable_path=_playwright_exe)
         await app.state.browser_manager.launch_all()
 
         if not app.state.browser_manager.browsers:
@@ -146,6 +152,7 @@ async def lifespan(app: FastAPI):
         app.state.browser_manager = None
         app.state.playwright_ready = False
         app.state.cache = None
+        raise
 
     # Semaphores — total_sem hard-caps ALL contexts; batch_throttle reserves headroom for manual requests
     app.state.total_sem = asyncio.Semaphore(SCRAPE_CONCURRENCY)
