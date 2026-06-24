@@ -13,6 +13,7 @@ from zepto.locations import LOCATIONS, LOCATIONS_BY_CITY, CITY_NAMES
 from zepto.scraper import fetch_zepto_data
 from schemas.price import ZeptoRequest, ZeptoAllCitiesRequest, ZeptoResponse
 from utils.google_sheets import GoogleSheetsClient
+from utils.scrape_helpers import batch_context, sem_with_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -35,24 +36,25 @@ async def check_zepto_price(body: ZeptoRequest, request: Request):
 
     cache = getattr(request.app.state, "cache", None)
     cache_key = f"zepto_{body.product_id}_{body.city}"
-    
+
     if cache is not None and cache_key in cache:
         result = cache[cache_key]
     else:
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            request.app.state.thread_pool,
-            partial(
-                fetch_zepto_data,
-                item_id=body.product_id,
-                pincode=city_data["pincode"],
-                lat=city_data["lat"],
-                lon=city_data["lng"],
-                city=body.city,
-                store_id=city_data["store_id"],
-                proxy_manager=proxy_manager,
-            ),
-        )
+        async with sem_with_timeout(request.app.state.total_sem):
+            result = await loop.run_in_executor(
+                request.app.state.thread_pool,
+                partial(
+                    fetch_zepto_data,
+                    item_id=body.product_id,
+                    pincode=city_data["pincode"],
+                    lat=city_data["lat"],
+                    lon=city_data["lng"],
+                    city=body.city,
+                    store_id=city_data["store_id"],
+                    proxy_manager=proxy_manager,
+                ),
+            )
         if cache is not None and result.get("status") not in ("error", "invalid_format"):
             cache[cache_key] = result
 
@@ -60,8 +62,6 @@ async def check_zepto_price(body: ZeptoRequest, request: Request):
 
 
 # ── All cities SSE stream ──────────────────────────────────────────────────
-
-ZEPTO_CONCURRENCY = 5  # Zepto rate-limits aggressively
 
 
 @router.post("/zepto/all-cities")
@@ -71,8 +71,6 @@ async def check_zepto_all_cities(body: ZeptoAllCitiesRequest, request: Request):
     Results are streamed as SSE events as they complete.
     """
     proxy_manager = request.app.state.zepto_proxy_manager
-    sem = asyncio.Semaphore(ZEPTO_CONCURRENCY)
-    queue: asyncio.Queue = asyncio.Queue()
 
     # Build work items: (product_id, city_data)
     work_items = []
@@ -94,7 +92,7 @@ async def check_zepto_all_cities(body: ZeptoAllCitiesRequest, request: Request):
         if cache is not None and cache_key in cache:
             return cache[cache_key].copy()
 
-        async with sem:
+        async with batch_context(request.app.state):
             loop = asyncio.get_running_loop()
             try:
                 result = await loop.run_in_executor(

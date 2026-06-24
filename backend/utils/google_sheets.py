@@ -349,6 +349,41 @@ class GoogleSheetsClient:
             spreadsheetId=spreadsheet_id, body=body
         ).execute()
 
+    def write_flipkart_minutes_header_and_pids(self, spreadsheet_id: str, tab_name: str, pids: list[str]) -> None:
+        """Write wide-format header + PID list to a newly created Flipkart Minutes result tab."""
+        if not self.service:
+            raise ValueError("Google Sheets service not initialized (missing credentials).")
+        from utils.scrape_helpers import FLIPKART_MINUTES_CITIES
+        city_cols = []
+        for city in FLIPKART_MINUTES_CITIES:
+            city_cols.extend([f"{city} Price", f"{city} MRP", f"{city} Status"])
+        header = ["PID"] + city_cols
+        rows: list[list[str]] = [header] + [[pid] for pid in pids]
+        self.service.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id,
+            range=f"{self._tab(tab_name)}!A1",
+            valueInputOption="USER_ENTERED",
+            body={"values": rows},
+        ).execute()
+
+    def batch_update_flipkart_minutes_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict[str, Any]]):
+        """Batch-update Flipkart Minutes result rows."""
+        if not self.service:
+            raise ValueError("Google Sheets service not initialized (missing credentials).")
+        data = []
+        for update in updates:
+            row = update["row"]
+            vals = update["values"]
+            end_col = _col_letter(1 + len(vals))
+            data.append({
+                "range": f"{self._tab(tab_name)}!B{row}:{end_col}{row}",
+                "values": [vals],
+            })
+        body = {"valueInputOption": "USER_ENTERED", "data": data}
+        return self.service.spreadsheets().values().batchUpdate(
+            spreadsheetId=spreadsheet_id, body=body
+        ).execute()
+
     # ── Async wrappers (run sync calls in executor to avoid blocking event loop) ──
 
     async def async_batch_update_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict]):
@@ -375,6 +410,11 @@ class GoogleSheetsClient:
         """Async wrapper for batch_update_flipkart_rows — runs in thread executor."""
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.batch_update_flipkart_rows, spreadsheet_id, tab_name, updates)
+
+    async def async_batch_update_flipkart_minutes_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict]):
+        """Async wrapper for batch_update_flipkart_minutes_rows — runs in thread executor."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.batch_update_flipkart_minutes_rows, spreadsheet_id, tab_name, updates)
 
     def append_to_historical(self, spreadsheet_id: str, tab_name: str, rows: list[list]) -> None:
         """Append rows to a historical tab — stacks below existing data."""

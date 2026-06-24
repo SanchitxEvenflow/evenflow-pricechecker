@@ -11,7 +11,7 @@ from flipkart_minutes.locations import LOCATIONS, LOCATIONS_BY_CITY, CITY_NAMES
 from flipkart_minutes.scraper import fetch_flipkart_minutes_data
 from schemas.price import FlipkartMinutesRequest, FlipkartMinutesAllCitiesRequest, FlipkartMinutesResponse
 from utils.google_sheets import GoogleSheetsClient
-from utils.scrape_helpers import batch_context, get_browser, sem_with_timeout
+from utils.scrape_helpers import batch_context, sem_with_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -36,17 +36,15 @@ async def check_flipkart_minutes_price(body: FlipkartMinutesRequest, request: Re
     if cache is not None and cache_key in cache:
         result = cache[cache_key]
     else:
-        proxy_manager = getattr(request.app.state, "zepto_proxy_manager", request.app.state.proxy_manager)
         async with sem_with_timeout(request.app.state.total_sem):
-            result = await fetch_flipkart_minutes_data(
-                item_id=body.product_id,
-                lat=city_data["lat"],
-                lon=city_data["lng"],
-                pincode=city_data.get("pincode"),
-                city=body.city,
-                browser=get_browser(request.app.state),
-                proxy_manager=proxy_manager,
-            )
+            try:
+                result = await fetch_flipkart_minutes_data(
+                    pid=body.product_id,
+                    city=body.city,
+                    app_state=request.app.state,
+                )
+            except RuntimeError as e:
+                raise HTTPException(status_code=503, detail=str(e))
         if cache is not None and result.get("status") not in ("error", "invalid_format"):
             cache[cache_key] = result
 
@@ -88,19 +86,19 @@ async def check_flipkart_minutes_all_cities(body: FlipkartMinutesAllCitiesReques
             return cache[cache_key].copy()
 
         async with batch_context(app_state):
-            result = await fetch_flipkart_minutes_data(
-                item_id=product_id,
-                lat=loc["lat"],
-                lon=loc["lng"],
-                pincode=loc.get("pincode"),
-                city=display_city,
-                browser=get_browser(app_state),
-                proxy_manager=proxy_manager,
-            )
-            
+            try:
+                result = await fetch_flipkart_minutes_data(
+                    pid=product_id,
+                    city=display_city,
+                    app_state=app_state,
+                )
+            except Exception as e:
+                logger.error("[FlipkartMinutes] worker error for %s %s: %s", product_id, display_city, e)
+                return {"product_id": product_id, "city": display_city, "status": "error", "error_message": str(e)}
+
             if cache is not None and result.get("status") not in ("error", "invalid_format"):
                 cache[cache_key] = result.copy()
-                
+
             return result
 
     async def event_stream():

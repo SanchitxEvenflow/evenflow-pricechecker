@@ -503,11 +503,10 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str) -> None:
         })
 
         proxy_manager = app.state.zepto_proxy_manager
-        sem = asyncio.Semaphore(int(os.getenv("ZEPTO_CONCURRENCY", "10")))
         loop = asyncio.get_running_loop()
 
         async def scrape_one_city(pid: str, loc: dict, fallback_title: str | None = None, fallback_mrp: float | None = None) -> tuple[str, dict]:
-            async with sem:
+            async with batch_context(app.state):
                 try:
                     result = await loop.run_in_executor(
                         app.state.thread_pool,
@@ -572,7 +571,7 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str) -> None:
         pid_index: dict[str, int] = {pid: i for i, pid in enumerate(pids)}
 
         # Bounded PID workers: max in-flight tasks = n_pid_workers × 9, not len(pids) × 9.
-        n_pid_workers = min(len(pids), max(1, int(os.getenv("ZEPTO_CONCURRENCY", "10")) // 2))
+        n_pid_workers = min(len(pids), max(1, SCRAPE_CONCURRENCY))
         work_queue: asyncio.Queue = asyncio.Queue()
         for pid in pids:
             work_queue.put_nowait(pid)
@@ -935,12 +934,8 @@ async def _run_full_flipkart_minutes_scrape(app, tab_prefix: str, run_type: str)
 
         try:
             sheets_client.create_tab(sheet_id, new_tab)
-            # Assuming write_instamart_header_and_pids or similar exists, using generic or specific
-            # For now, we reuse the blinkit/instamart logic, we'd need write_flipkart_minutes_header_and_pids in sheets client
-            # But the user hasn't asked us to implement the full google sheet logic for flipkart minutes yet.
-            # We'll just log it.
             try:
-                sheets_client.write_instamart_header_and_pids(sheet_id, new_tab, pids)
+                sheets_client.write_flipkart_minutes_header_and_pids(sheet_id, new_tab, pids)
             except AttributeError:
                 pass # It's a base implementation, we'll need to update GoogleSheetsClient later
             logger.info("Flipkart Minutes: created tab '%s' with %d PIDs", new_tab, len(pids))
@@ -961,7 +956,6 @@ async def _run_full_flipkart_minutes_scrape(app, tab_prefix: str, run_type: str)
         })
 
         from flipkart_minutes.scraper import fetch_flipkart_minutes_data
-        proxy_manager = getattr(app.state, "zepto_proxy_manager", app.state.proxy_manager)
 
         total_done = 0
         total_success = 0
@@ -973,12 +967,9 @@ async def _run_full_flipkart_minutes_scrape(app, tab_prefix: str, run_type: str)
             async with batch_context(app.state):
                 try:
                     result = await fetch_flipkart_minutes_data(
-                        item_id=pid_,
-                        lat=loc["lat"],
-                        lon=loc["lng"],
+                        pid=pid_,
                         city=loc["name"],
-                        browser=get_browser(app.state),
-                        proxy_manager=proxy_manager,
+                        app_state=app.state,
                     )
                 except Exception:
                     result = {"city": loc["name"], "status": "error"}
@@ -1060,9 +1051,8 @@ async def _run_full_flipkart_minutes_scrape(app, tab_prefix: str, run_type: str)
                 should_flush = (len(batch_updates) == BATCH_SIZE) or (total_done == len(pids))
                 if should_flush:
                     try:
-                        # Assuming async_batch_update_instamart_rows or similar can be used/added
                         try:
-                            await sheets_client.async_batch_update_instamart_rows(sheet_id, new_tab, batch_updates)
+                            await sheets_client.async_batch_update_flipkart_minutes_rows(sheet_id, new_tab, batch_updates)
                         except AttributeError:
                             pass
                         logger.info(
@@ -1082,7 +1072,7 @@ async def _run_full_flipkart_minutes_scrape(app, tab_prefix: str, run_type: str)
                 if batch_updates:
                     try:
                         try:
-                            await sheets_client.async_batch_update_instamart_rows(sheet_id, new_tab, batch_updates)
+                            await sheets_client.async_batch_update_flipkart_minutes_rows(sheet_id, new_tab, batch_updates)
                         except AttributeError:
                             pass
                         logger.info("Flipkart Minutes: flushed final %d rows on shutdown", len(batch_updates))
@@ -1334,7 +1324,32 @@ def setup_scheduler(app) -> AsyncIOScheduler | None:
         coalesce=True,
     )
     
+    async def _refresh_fkm_cookies_job():
+        from flipkart_minutes.cookie_manager import refresh_fkm_cookies, needs_refresh
+        try:
+            current = getattr(app.state, "fkm_cookies", "")
+            if current:
+                lock = getattr(app.state, "fkm_cookie_lock", None)
+                if lock:
+                    async with lock:
+                        app.state.fkm_cookies = await refresh_fkm_cookies(app.state.fkm_cookies)
+                else:
+                    app.state.fkm_cookies = await refresh_fkm_cookies(current)
+                logger.info("[FKM] Scheduled cookie refresh complete")
+        except Exception as e:
+            logger.error("[FKM] Scheduled cookie refresh failed: %s", e)
+
+    scheduler.add_job(
+        _refresh_fkm_cookies_job,
+        "interval",
+        days=14,
+        id="fkm_cookie_refresh",
+        max_instances=1,
+        coalesce=True,
+    )
+
     scheduler.start()
     logger.info("Cron: Amazon daily scrape scheduled at %02d:%02d IST", cron_hour, cron_minute)
     logger.info("Cron: Flipkart daily scrape scheduled at %02d:%02d IST", flipkart_cron_hour, flipkart_cron_minute)
+    logger.info("Cron: FK Minutes cookie refresh scheduled every 14 days")
     return scheduler

@@ -1,132 +1,207 @@
-import os
-import aiohttp
+"""FK Minutes price scraper — direct Rome API via curl_cffi, no Playwright."""
+
 import asyncio
 import logging
-import re
-import json
-from typing import List, Dict, Any
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
+from curl_cffi import requests as cffi
+
+from flipkart_minutes.cookie_manager import refresh_fkm_cookies
 
 logger = logging.getLogger(__name__)
 
-def _error_result(item_id: str, city: str, url: str, msg: str = "error") -> dict:
-    return {
-        "product_id": item_id,
-        "city": city,
-        "title": None,
-        "price": None,
-        "mrp": None,
-        "status": msg,
-        "is_sold_out": False,
-        "url": url,
-        "checked_at": datetime.now(timezone.utc).astimezone().isoformat(),
-        "error_message": msg,
-    }
+IST = timezone(timedelta(hours=5, minutes=30))
+
+ROME_ENDPOINT = "https://1.rome.api.flipkart.com/api/4/page/fetch?cacheFirst=false"
+
+_CHROME_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/122.0.0.0 Safari/537.36"
+)
+_MSITE_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/122.0.0.0 Safari/537.36 FKUA/msite/0.0.4/msite/Mobile"
+)
+
+_BASE_HEADERS = {
+    "accept": "*/*",
+    "accept-language": "en-IN",
+    "content-type": "application/json",
+    "origin": "https://www.flipkart.com",
+    "referer": "https://www.flipkart.com/",
+    "user-agent": _CHROME_UA,
+    "x-user-agent": _MSITE_UA,
+    "flipkart_secure": "true",
+}
+
+
+def _rome_fetch(pid: str, cookie_str: str) -> dict:
+    """POST to Rome API and return parsed JSON."""
+    body = {"pageUri": f"/product/p/itme?pid={pid}&marketplace=HYPERLOCAL"}
+    resp = cffi.post(
+        ROME_ENDPOINT,
+        json=body,
+        headers={**_BASE_HEADERS, "cookie": cookie_str},
+        impersonate="chrome124",
+        timeout=20,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _is_302(data: dict) -> bool:
+    """Return True when Rome signals a location redirect (no cookie location set)."""
+    return bool(
+        data.get("RESPONSE", {})
+        .get("pageMeta", {})
+        .get("redirectionObject")
+    )
+
+
+def _extract(data: dict) -> tuple[float | None, float | None, str | None, bool]:
+    """
+    Walk Rome slots and extract (price, mrp, title, in_stock).
+    Confirmed paths from live response:
+      price  → PRODUCT_PRICE_SUMMARY.widget.data.pricing.value.finalPrice.value
+      mrp    → PRODUCT_PRICE_SUMMARY.widget.data.pricing.value.prices[0].value
+      title  → PRODUCT_TITLE.widget.data.titleComponent.value.title
+      stock  → PRODUCT_ACTION_EXTENDED.widget.data.addToCartComponent.action.params.valid
+    """
+    slots = data.get("RESPONSE", {}).get("slots", [])
+    price: float | None = None
+    mrp: float | None = None
+    title: str | None = None
+    in_stock: bool = False
+
+    for slot in slots:
+        widget = slot.get("widget", {})
+        wtype = widget.get("type", "")
+        wd = widget.get("data", {}) or {}
+
+        if wtype == "PRODUCT_PRICE_SUMMARY":
+            pv = wd.get("pricing", {}).get("value", {})
+            raw_price = pv.get("finalPrice", {}).get("value")
+            if raw_price is not None:
+                try:
+                    price = float(raw_price)
+                except (TypeError, ValueError):
+                    pass
+            prices_list = pv.get("prices", [])
+            if prices_list:
+                raw_mrp = prices_list[0].get("value")
+                if raw_mrp is not None:
+                    try:
+                        mrp = float(raw_mrp)
+                    except (TypeError, ValueError):
+                        pass
+
+        elif wtype == "PRODUCT_TITLE":
+            tc = wd.get("titleComponent", {}).get("value", {})
+            title = tc.get("title")
+
+        elif wtype == "PRODUCT_ACTION_EXTENDED":
+            valid = (
+                wd.get("addToCartComponent", {})
+                .get("action", {})
+                .get("params", {})
+                .get("valid")
+            )
+            if valid is True:
+                in_stock = True
+
+    return price, mrp, title, in_stock
+
 
 async def fetch_flipkart_minutes_data(
-    item_id: str,
-    lat: float,
-    lon: float,
-    pincode: str = None,
-    city: str = "",
-    browser: Any = None,
-    proxy_manager: Any = None,
+    pid: str,
+    city: str,
+    app_state=None,
+    **kwargs,  # absorb legacy browser=/proxy_manager= kwargs
 ) -> dict:
-    """Fetch Flipkart Minutes data using direct HTTP requests with cookies."""
-    from dotenv import load_dotenv
-    load_dotenv()
-    
-    product_url = f"https://www.flipkart.com/product/p/itme?pid={item_id}&marketplace=HYPERLOCAL"
-    now = datetime.now(timezone.utc).astimezone().isoformat()
-    
-    cookie_string = os.environ.get("FLIPKART_MINUTES_COOKIES", "")
-    if not cookie_string:
-        logger.error("[FlipkartMinutes] FLIPKART_MINUTES_COOKIES not found in .env")
-        return _error_result(item_id, city, product_url, "missing_cookies")
-        
-    headers = {
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Cookie": cookie_string,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
-    }
-    
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(product_url, headers=headers, timeout=15) as response:
-                if response.status != 200:
-                    logger.warning(f"[FlipkartMinutes] HTTP {response.status} for {item_id}")
-                    return _error_result(item_id, city, product_url, f"http_{response.status}")
-                
-                html = await response.text()
-                
-                # Safer and more optimized JSON-LD extraction
-                price = None
-                mrp = None
-                
-                # Find all JSON-LD blocks
-                for match in re.finditer(r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>', html, re.DOTALL):
-                    try:
-                        data = json.loads(match.group(1))
-                        # The schema could be a list or a dict
-                        if isinstance(data, list):
-                            items = data
-                        else:
-                            items = [data]
-                            
-                        for item in items:
-                            if item.get("@type") == "Product" and "offers" in item:
-                                offers = item["offers"]
-                                if isinstance(offers, dict):
-                                    if "price" in offers:
-                                        price = float(offers["price"])
-                                    if "highPrice" in offers or "price" in offers:
-                                        mrp = float(offers.get("highPrice", price))
-                    except json.JSONDecodeError:
-                        continue
-                        
-                if price is None:
-                    # Fallback to general regex if JSON-LD parsing didn't find the product
-                    price_match = re.search(r'"price":\s*([0-9.]+)', html)
-                    mrp_match = re.search(r'"mrp":\s*([0-9.]+)', html)
-                    if price_match:
-                        price = float(price_match.group(1))
-                        mrp = float(mrp_match.group(1)) if mrp_match else price
-                
-                if price is None:
-                    logger.info(f"[FlipkartMinutes] No price found in HTML for {item_id}")
-                    return _error_result(item_id, city, product_url, "data_not_found")
-                
-                # Simple title extraction
-                import html as html_lib
-                title = "Unknown Product"
-                title_match = re.search(r'<title>(.*?)</title>', html)
-                if title_match:
-                    seo_title = html_lib.unescape(title_match.group(1))
-                    t = seo_title.split(" Price in India")[0].strip()
-                    if t and t != seo_title:
-                        title = t
-                    else:
-                        t = seo_title.split(" - Buy ")[0].strip()
-                        if t and t != seo_title:
-                            title = t
-                
-                # Check stock
-                is_sold_out = "Sold Out" in html or "Currently Unavailable" in html
-                
-                return {
-                    "product_id": item_id,
-                    "city": city,
-                    "title": title,
-                    "price": price,
-                    "mrp": mrp,
-                    "status": "available" if not is_sold_out else "out_of_stock",
-                    "is_sold_out": is_sold_out,
-                    "url": product_url,
-                    "checked_at": now,
-                    "error_message": None,
-                }
-                
-    except Exception as e:
-        logger.error(f"[FlipkartMinutes] Error scraping {item_id}: {e}")
-        return _error_result(item_id, city, product_url, str(e))
+    """
+    Fetch FK Minutes price for a single product via Rome API.
+
+    Uses `app_state.fkm_cookies` for auth. On Rome 302 (location cookie stale),
+    acquires `app_state.fkm_cookie_lock`, refreshes once, then retries.
+    """
+    checked_at = datetime.now(IST).isoformat()
+    url = f"https://www.flipkart.com/product/p/itme?pid={pid}&marketplace=HYPERLOCAL"
+
+    def _err(msg: str) -> dict:
+        return {
+            "product_id": pid,
+            "city": city,
+            "title": None,
+            "price": None,
+            "mrp": None,
+            "status": "error",
+            "is_sold_out": False,
+            "url": url,
+            "checked_at": checked_at,
+            "error_message": msg,
+        }
+
+    if app_state is None or not getattr(app_state, "fkm_cookies", None):
+        logger.error("[FKM] No fkm_cookies in app_state for pid=%s", pid)
+        return _err("FK Minutes cookies not configured")
+
+    cookie_str: str = app_state.fkm_cookies
+    refreshed = False
+
+    for attempt in range(4):
+        try:
+            data = await asyncio.get_event_loop().run_in_executor(
+                None, _rome_fetch, pid, cookie_str
+            )
+        except Exception as e:
+            logger.warning("[FKM] Rome request error pid=%s attempt=%d: %s", pid, attempt, e)
+            await asyncio.sleep(2)
+            continue
+
+        if _is_302(data):
+            if refreshed:
+                logger.error("[FKM] Still 302 after cookie refresh for pid=%s", pid)
+                return _err("Location cookie invalid after refresh")
+
+            logger.info("[FKM] Rome 302 for pid=%s — refreshing cookies", pid)
+            lock = getattr(app_state, "fkm_cookie_lock", None)
+            if lock:
+                async with lock:
+                    # Re-check: another concurrent task may have already refreshed
+                    if app_state.fkm_cookies == cookie_str:
+                        app_state.fkm_cookies = await refresh_fkm_cookies(app_state.fkm_cookies)
+                cookie_str = app_state.fkm_cookies
+            else:
+                cookie_str = await refresh_fkm_cookies(cookie_str)
+            refreshed = True
+            continue
+
+        price, mrp, title, in_stock = _extract(data)
+
+        if price is None:
+            status = "out_of_stock"
+        elif not in_stock:
+            status = "out_of_stock"
+        else:
+            status = "available"
+
+        logger.info(
+            "[FKM] pid=%s city=%s price=%s mrp=%s status=%s",
+            pid, city, price, mrp, status,
+        )
+        return {
+            "product_id": pid,
+            "city": city,
+            "title": title or f"pid:{pid}",
+            "price": price,
+            "mrp": mrp,
+            "status": status,
+            "is_sold_out": status == "out_of_stock",
+            "url": url,
+            "checked_at": checked_at,
+            "error_message": None,
+        }
+
+    return _err("Max retries exceeded")

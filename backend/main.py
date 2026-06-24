@@ -219,6 +219,25 @@ async def lifespan(app: FastAPI):
     app.state.instamart_cron_task = None
     app.state.flipkart_minutes_cron_task = None
 
+    # FK Minutes: load cookie, refresh at-JWT if stale
+    app.state.fkm_cookie_lock = asyncio.Lock()
+    _fkm_raw = os.getenv("FLIPKART_MINUTES_COOKIES", "")
+    if _fkm_raw:
+        from flipkart_minutes.cookie_manager import needs_refresh, refresh_fkm_cookies
+        if needs_refresh(_fkm_raw):
+            try:
+                _fkm_raw = await refresh_fkm_cookies(_fkm_raw)
+                logger.info("[FKM] Cookie refreshed on startup")
+            except Exception as _e:
+                logger.warning("[FKM] Cookie refresh on startup failed: %s", _e)
+        else:
+            from flipkart_minutes.cookie_manager import at_expiry
+            _exp = at_expiry(_fkm_raw)
+            logger.info("[FKM] Cookie loaded — at expires %s", _exp.isoformat() if _exp else "unknown")
+    else:
+        logger.warning("[FKM] FLIPKART_MINUTES_COOKIES not set — FK Minutes will error on use")
+    app.state.fkm_cookies = _fkm_raw
+
     app.state.cron_scheduler = setup_scheduler(app)
     if app.state.cron_scheduler:
         logger.info("Cron scheduler active — next run at %02d:%02d IST",
@@ -268,6 +287,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
+        "http://127.0.0.1:3000",
         "https://evenflow-pricescraper.vercel.app",
     ],
     allow_origin_regex=r"https://.*\.vercel\.app",

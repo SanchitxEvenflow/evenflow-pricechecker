@@ -2,6 +2,7 @@ fastapi
 uvicorn[standard]
 granian
 requests
+aiohttp>=3.9
 curl_cffi>=0.7
 beautifulsoup4
 playwright
@@ -11,3 +12,4 @@ google-api-python-client
 google-auth
 apscheduler>=3.10,<4.0
 PyJWT>=2.8
+cachetools>=5.0

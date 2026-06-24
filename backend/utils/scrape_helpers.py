@@ -26,6 +26,8 @@ CHUNK_SIZE = 50
 
 def get_browser(app_state):
     """Round-robin browser from pool via BrowserPoolManager."""
+    if not app_state.browser_manager:
+        raise RuntimeError("Browser pool not initialized — Playwright failed to start")
     browser = app_state.browser_manager.get_browser()
     if not browser:
         raise RuntimeError("No browsers available in pool")
