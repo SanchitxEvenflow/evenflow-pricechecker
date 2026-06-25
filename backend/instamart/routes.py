@@ -3,6 +3,9 @@
 import asyncio
 import json
 import logging
+import os
+from functools import partial
+
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse
 
@@ -10,7 +13,7 @@ from instamart.locations import LOCATIONS, LOCATIONS_BY_CITY, CITY_NAMES
 from instamart.scraper import fetch_instamart_data
 from schemas.price import InstamartRequest, InstamartAllCitiesRequest, InstamartResponse
 from utils.google_sheets import GoogleSheetsClient
-from utils.scrape_helpers import batch_context, get_browser, sem_with_timeout
+from utils.scrape_helpers import batch_context, sem_with_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -29,22 +32,27 @@ async def check_instamart_price(body: InstamartRequest, request: Request):
             detail=f"Invalid city '{body.city}'. Valid cities: {CITY_NAMES}",
         )
 
+    proxy_manager = request.app.state.proxy_manager
+
     cache = getattr(request.app.state, "cache", None)
     cache_key = f"instamart_{body.product_id}_{body.city}"
     
     if cache is not None and cache_key in cache:
         result = cache[cache_key]
     else:
-        proxy_manager = request.app.state.proxy_manager
+        loop = asyncio.get_running_loop()
         async with sem_with_timeout(request.app.state.total_sem):
-            result = await fetch_instamart_data(
-                item_id=body.product_id,
-                lat=city_data["lat"],
-                lon=city_data["lng"],
-                city=body.city,
-                store_id=city_data["store_id"],
-                browser=get_browser(request.app.state),
-                proxy_manager=proxy_manager,
+            result = await loop.run_in_executor(
+                request.app.state.thread_pool,
+                partial(
+                    fetch_instamart_data,
+                    item_id=body.product_id,
+                    lat=city_data["lat"],
+                    lon=city_data["lng"],
+                    city=body.city,
+                    store_id=city_data["store_id"],
+                    proxy_manager=proxy_manager,
+                ),
             )
         if cache is not None and result.get("status") not in ("error", "invalid_format"):
             cache[cache_key] = result
@@ -61,7 +69,6 @@ async def check_instamart_all_cities(body: InstamartAllCitiesRequest, request: R
     Results are streamed as SSE events as they complete.
     """
     proxy_manager = request.app.state.proxy_manager
-    queue: asyncio.Queue = asyncio.Queue()
     app_state = request.app.state
 
     # Build work items: (product_id, city_data)
@@ -88,15 +95,19 @@ async def check_instamart_all_cities(body: InstamartAllCitiesRequest, request: R
             return cache[cache_key].copy()
 
         async with batch_context(app_state):
-            result = await fetch_instamart_data(
-                item_id=product_id,
-                lat=loc["lat"],
-                lon=loc["lng"],
-                city=display_city,
-                store_id=loc["store_id"],
-                browser=get_browser(app_state),
-                proxy_manager=proxy_manager,
-                target_variant_name=target_variant_name,
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(
+                app_state.thread_pool,
+                partial(
+                    fetch_instamart_data,
+                    item_id=product_id,
+                    lat=loc["lat"],
+                    lon=loc["lng"],
+                    city=display_city,
+                    store_id=loc["store_id"],
+                    proxy_manager=proxy_manager,
+                    target_variant_name=target_variant_name,
+                ),
             )
             
             if cache is not None and result.get("status") not in ("error", "invalid_format"):
@@ -176,7 +187,6 @@ async def instamart_cron_status(request: Request):
     """Return current instamart scrape status."""
     return dict(getattr(request.app.state, "instamart_cron_status", {}))
 
-import os
 
 @router.get("/instamart/products")
 async def get_instamart_products():

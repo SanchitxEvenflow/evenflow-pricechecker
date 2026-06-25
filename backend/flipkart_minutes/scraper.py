@@ -6,7 +6,8 @@ from datetime import datetime, timezone, timedelta
 
 from curl_cffi import requests as cffi
 
-from flipkart_minutes.cookie_manager import refresh_fkm_cookies
+from flipkart_minutes.cookie_manager import refresh_fkm_cookies, bootstrap_fkm_cookies
+from flipkart_minutes.locations import LOCATIONS_BY_CITY
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,6 @@ def _rome_fetch(pid: str, cookie_str: str, hyperlocal: bool = True) -> dict:
         impersonate="chrome124",
         timeout=20,
     )
-    resp.raise_for_status()
     return resp.json()
 
 
@@ -68,13 +68,10 @@ def _has_price_widget(data: dict) -> bool:
     )
 
 
-def _is_302(data: dict) -> bool:
-    """Return True when Rome signals a location redirect (no cookie location set)."""
-    return bool(
-        data.get("RESPONSE", {})
-        .get("pageMeta", {})
-        .get("redirectionObject")
-    )
+def _needs_cookie_refresh(data: dict) -> bool:
+    """Return True when Rome signals a 406 DC Change (stale cookie)."""
+    is_406 = data.get("STATUS_CODE") == 406 or data.get("ERROR_MESSAGE") == "DC Change"
+    return is_406
 
 
 def _extract(data: dict) -> tuple[float | None, float | None, str | None, bool]:
@@ -174,6 +171,7 @@ async def fetch_flipkart_minutes_data(
 
     cookie_str: str = app_state.fkm_cookies
     refreshed = False
+    last_error = ""
 
     for attempt in range(4):
         try:
@@ -181,25 +179,28 @@ async def fetch_flipkart_minutes_data(
                 None, _rome_fetch, pid, cookie_str, True  # HYPERLOCAL
             )
         except Exception as e:
+            last_error = str(e)
             logger.warning("[FKM] Rome request error pid=%s attempt=%d: %s", pid, attempt, e)
             await asyncio.sleep(2)
             continue
 
-        if _is_302(data):
+        if _needs_cookie_refresh(data):
             if refreshed:
-                logger.error("[FKM] Still 302 after cookie refresh for pid=%s", pid)
+                logger.error("[FKM] Still 302/406 after cookie refresh for pid=%s", pid)
                 return _err("Location cookie invalid after refresh")
 
-            logger.info("[FKM] Rome 302 for pid=%s — refreshing cookies", pid)
+            logger.info("[FKM] Rome 302/406 for pid=%s — bootstrapping new cookies", pid)
             lock = getattr(app_state, "fkm_cookie_lock", None)
+            
+            pincode = LOCATIONS_BY_CITY.get(city, {}).get("pincode", "560102")
             if lock:
                 async with lock:
-                    # Re-check: another concurrent task may have already refreshed
+                    # Re-check: another concurrent task may have already bootstrapped
                     if app_state.fkm_cookies == cookie_str:
-                        app_state.fkm_cookies = await refresh_fkm_cookies(app_state.fkm_cookies)
+                        app_state.fkm_cookies = await bootstrap_fkm_cookies(app_state.browser_manager, pincode=pincode)
                 cookie_str = app_state.fkm_cookies
             else:
-                cookie_str = await refresh_fkm_cookies(cookie_str)
+                cookie_str = await bootstrap_fkm_cookies(app_state.browser_manager, pincode=pincode)
             refreshed = True
             continue
 
@@ -252,4 +253,4 @@ async def fetch_flipkart_minutes_data(
             "error_message": None,
         }
 
-    return _err("Max retries exceeded")
+    return _err(f"Max retries exceeded. Last error: {last_error}")

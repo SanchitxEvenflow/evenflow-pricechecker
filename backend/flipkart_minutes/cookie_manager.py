@@ -113,3 +113,76 @@ async def refresh_fkm_cookies(cookie_str: str) -> str:
         logger.warning("[FKM] Cookie refresh done but could not verify new at expiry")
 
     return new_str
+
+
+async def bootstrap_fkm_cookies(browser_manager, pincode: str = "560102") -> str:
+    """
+    Automate the initial acquisition of Flipkart Minutes cookies (T, at, SN)
+    by launching a headless Playwright page and explicitly setting a Bengaluru pincode.
+    """
+    logger.info("[FKM] Bootstrapping fresh session cookies via Playwright...")
+    context = None
+    try:
+        browser = browser_manager.get_browser()
+        if not browser:
+            logger.error("[FKM] No browsers available in pool")
+            return ""
+            
+        context = await browser.new_context()
+        page = await context.new_page()
+        
+        # 1. Visit grocery page to initialize FKM session
+        await page.goto("https://www.flipkart.com/grocery-supermart-store", wait_until="networkidle", timeout=30000)
+        
+        # 2. Open location modal
+        try:
+            # Click the location div in the header
+            location_trigger = page.locator("text='Select delivery location'").first
+            await location_trigger.click(timeout=5000)
+        except Exception:
+            pass # Modal might auto-open
+            
+        # 3. Enter pincode and submit
+        pincode_input = page.locator("input[placeholder*='pin code' i], input[placeholder*='pincode' i]").first
+        await pincode_input.fill(pincode, timeout=10000)
+        
+        # Wait for suggestions to load
+        await page.wait_for_timeout(2000)
+        
+        try:
+            suggestions = page.locator(f"div:has-text('{pincode}')")
+            count = await suggestions.count()
+            if count > 1:
+                await suggestions.nth(1).click(timeout=3000)
+            else:
+                await pincode_input.press("Enter")
+            await page.wait_for_timeout(3000)
+        except Exception:
+            pass
+        
+        # 4. Harvest cookies
+        cookies = await context.cookies()
+        
+        # 5. Extract target cookies
+        target_names = {"T", "at", "SN"}
+        cookie_parts = []
+        for c in cookies:
+            if c["name"] in target_names:
+                cookie_parts.append(f"{c['name']}={c['value']}")
+                
+        cookie_str = "; ".join(cookie_parts)
+        
+        if "at=" in cookie_str and "T=" in cookie_str:
+            exp = at_expiry(cookie_str)
+            logger.info("[FKM] Playwright bootstrap SUCCESS — at expires %s", exp.isoformat() if exp else "unknown")
+            return cookie_str
+        else:
+            logger.warning("[FKM] Playwright bootstrap incomplete. Cookies: %s", cookie_str)
+            return cookie_str
+            
+    except Exception as e:
+        logger.error("[FKM] Playwright bootstrap failed: %s", e)
+        return ""
+    finally:
+        if context:
+            await context.close()
