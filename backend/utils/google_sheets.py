@@ -67,7 +67,7 @@ class GoogleSheetsClient:
         result = self.service.spreadsheets().values().get(
             spreadsheetId=spreadsheet_id,
             range=range_name
-        ).execute()
+        ).execute(num_retries=3)
 
         values = result.get("values", [])
 
@@ -100,7 +100,7 @@ class GoogleSheetsClient:
         result = self.service.spreadsheets().values().get(
             spreadsheetId=spreadsheet_id,
             range=range_name
-        ).execute()
+        ).execute(num_retries=3)
 
         values = result.get("values", [])
         products = []
@@ -122,7 +122,7 @@ class GoogleSheetsClient:
         """Returns all sheet/tab names in the spreadsheet."""
         if not self.service:
             raise ValueError("Google Sheets service not initialized (missing credentials).")
-        meta = self.service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+        meta = self.service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute(num_retries=3)
         return [s["properties"]["title"] for s in meta.get("sheets", [])]
 
     def create_tab(self, spreadsheet_id: str, tab_name: str) -> None:
@@ -130,7 +130,7 @@ class GoogleSheetsClient:
         if not self.service:
             raise ValueError("Google Sheets service not initialized (missing credentials).")
         body = {"requests": [{"addSheet": {"properties": {"title": tab_name}}}]}
-        self.service.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body=body).execute()
+        self.service.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body=body).execute(num_retries=3)
 
     def write_header_and_asins(self, spreadsheet_id: str, tab_name: str, asins: list[str]) -> None:
         """Write header row + ASIN list to column A of a newly created tab."""
@@ -145,7 +145,7 @@ class GoogleSheetsClient:
             range=f"{self._tab(tab_name)}!A1",
             valueInputOption="USER_ENTERED",
             body={"values": rows},
-        ).execute()
+        ).execute(num_retries=3)
 
     def write_blinkit_header_and_pids(self, spreadsheet_id: str, tab_name: str, pids: list[str]) -> None:
         """Write wide-format header + PID list to a newly created Blinkit result tab.
@@ -166,7 +166,7 @@ class GoogleSheetsClient:
             range=f"{self._tab(tab_name)}!A1",
             valueInputOption="USER_ENTERED",
             body={"values": rows},
-        ).execute()
+        ).execute(num_retries=3)
 
     def batch_update_blinkit_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict[str, Any]]):
         """Batch-update Blinkit result rows.
@@ -188,7 +188,7 @@ class GoogleSheetsClient:
         body = {"valueInputOption": "USER_ENTERED", "data": data}
         return self.service.spreadsheets().values().batchUpdate(
             spreadsheetId=spreadsheet_id, body=body
-        ).execute()
+        ).execute(num_retries=3)
 
     def write_zepto_header_and_pids(self, spreadsheet_id: str, tab_name: str, pids: list[str]) -> None:
         """Write wide-format header + PID list to a newly created Zepto result tab.
@@ -209,7 +209,7 @@ class GoogleSheetsClient:
             range=f"{self._tab(tab_name)}!A1",
             valueInputOption="USER_ENTERED",
             body={"values": rows},
-        ).execute()
+        ).execute(num_retries=3)
 
     def batch_update_zepto_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict[str, Any]]):
         """Batch-update Zepto result rows.
@@ -231,7 +231,7 @@ class GoogleSheetsClient:
         body = {"valueInputOption": "USER_ENTERED", "data": data}
         return self.service.spreadsheets().values().batchUpdate(
             spreadsheetId=spreadsheet_id, body=body
-        ).execute()
+        ).execute(num_retries=3)
 
     def batch_update_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict[str, Any]]):
         """
@@ -265,7 +265,7 @@ class GoogleSheetsClient:
         result = self.service.spreadsheets().values().batchUpdate(
             spreadsheetId=spreadsheet_id,
             body=body
-        ).execute()
+        ).execute(num_retries=3)
 
         return result
 
@@ -282,7 +282,7 @@ class GoogleSheetsClient:
             range=f"{self._tab(tab_name)}!A1",
             valueInputOption="USER_ENTERED",
             body={"values": rows},
-        ).execute()
+        ).execute(num_retries=3)
 
     def batch_update_flipkart_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict[str, Any]]):
         """Batch-update Flipkart result rows.
@@ -303,7 +303,7 @@ class GoogleSheetsClient:
         body = {"valueInputOption": "USER_ENTERED", "data": data}
         return self.service.spreadsheets().values().batchUpdate(
             spreadsheetId=spreadsheet_id, body=body
-        ).execute()
+        ).execute(num_retries=3)
 
     def write_instamart_header_and_pids(self, spreadsheet_id: str, tab_name: str, pids: list[str]) -> None:
         """Write wide-format header + PID list to a newly created Instamart result tab.
@@ -325,7 +325,7 @@ class GoogleSheetsClient:
             range=f"{self._tab(tab_name)}!A1",
             valueInputOption="USER_ENTERED",
             body={"values": rows},
-        ).execute()
+        ).execute(num_retries=3)
 
     def batch_update_instamart_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict[str, Any]]):
         """Batch-update Instamart result rows.
@@ -347,7 +347,7 @@ class GoogleSheetsClient:
         body = {"valueInputOption": "USER_ENTERED", "data": data}
         return self.service.spreadsheets().values().batchUpdate(
             spreadsheetId=spreadsheet_id, body=body
-        ).execute()
+        ).execute(num_retries=3)
 
     def write_flipkart_minutes_header_and_pids(self, spreadsheet_id: str, tab_name: str, pids: list[str]) -> None:
         """Write wide-format header + PID list to a newly created Flipkart Minutes result tab."""
@@ -364,7 +364,7 @@ class GoogleSheetsClient:
             range=f"{self._tab(tab_name)}!A1",
             valueInputOption="USER_ENTERED",
             body={"values": rows},
-        ).execute()
+        ).execute(num_retries=3)
 
     def batch_update_flipkart_minutes_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict[str, Any]]):
         """Batch-update Flipkart Minutes result rows."""
@@ -382,7 +382,7 @@ class GoogleSheetsClient:
         body = {"valueInputOption": "USER_ENTERED", "data": data}
         return self.service.spreadsheets().values().batchUpdate(
             spreadsheetId=spreadsheet_id, body=body
-        ).execute()
+        ).execute(num_retries=3)
 
     # ── Async wrappers (run sync calls in executor to avoid blocking event loop) ──
 
@@ -426,7 +426,7 @@ class GoogleSheetsClient:
             valueInputOption="USER_ENTERED",
             insertDataOption="INSERT_ROWS",
             body={"values": rows},
-        ).execute()
+        ).execute(num_retries=3)
 
     async def async_append_to_historical(self, spreadsheet_id: str, tab_name: str, rows: list[list]):
         """Async wrapper for append_to_historical — runs in thread executor."""
