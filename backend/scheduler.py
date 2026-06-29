@@ -881,6 +881,14 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str) -> Non
         app.state.instamart_cron_status["is_running"] = False
 
 
+async def run_scheduled_instamart_scrape(app) -> None:
+    """Called by APScheduler on cron intervals."""
+    if app.state.instamart_cron_status.get("is_running"):
+        logger.warning("Instamart: scheduled scrape skipped — a run is already active (duplicate trigger?)")
+        return
+    await _run_full_instamart_scrape(app, tab_prefix="Instamart_Run", run_type="instamart_automatic")
+
+
 async def run_manual_instamart_trigger(app) -> None:
     """Called when user manually triggers the Instamart full scrape from the UI."""
     await asyncio.sleep(0.1)
@@ -1324,6 +1332,19 @@ def setup_scheduler(app) -> AsyncIOScheduler | None:
         coalesce=True,
     )
     
+    instamart_cron_hour = int(os.getenv("INSTAMART_CRON_HOUR", "12"))
+    instamart_cron_minute = int(os.getenv("INSTAMART_CRON_MINUTE", "0"))
+    scheduler.add_job(
+        run_scheduled_instamart_scrape,
+        "cron",
+        hour=instamart_cron_hour,
+        minute=instamart_cron_minute,
+        args=[app],
+        id="instamart_daily_scrape",
+        max_instances=1,
+        coalesce=True,
+    )
+    
     async def _refresh_fkm_cookies_job():
         from flipkart_minutes.cookie_manager import refresh_fkm_cookies, needs_refresh
         try:
@@ -1351,5 +1372,6 @@ def setup_scheduler(app) -> AsyncIOScheduler | None:
     scheduler.start()
     logger.info("Cron: Amazon daily scrape scheduled at %02d:%02d IST", cron_hour, cron_minute)
     logger.info("Cron: Flipkart daily scrape scheduled at %02d:%02d IST", flipkart_cron_hour, flipkart_cron_minute)
+    logger.info("Cron: Instamart daily scrape scheduled at %02d:%02d IST", instamart_cron_hour, instamart_cron_minute)
     logger.info("Cron: FK Minutes cookie refresh scheduled every 14 days")
     return scheduler
