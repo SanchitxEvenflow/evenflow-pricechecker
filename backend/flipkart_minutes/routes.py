@@ -59,9 +59,8 @@ async def check_flipkart_minutes_all_cities(body: FlipkartMinutesAllCitiesReques
     Scrape flipkart minutes for one or more product IDs across all cities.
     Results are streamed as SSE events as they complete.
     """
-    proxy_manager = getattr(request.app.state, "zepto_proxy_manager", request.app.state.proxy_manager)
-    queue: asyncio.Queue = asyncio.Queue()
     app_state = request.app.state
+    queue: asyncio.Queue = asyncio.Queue()
 
     work_items = [
         (pid.strip(), loc)

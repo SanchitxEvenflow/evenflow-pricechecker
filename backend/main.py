@@ -100,9 +100,9 @@ async def lifespan(app: FastAPI):
     proxy_status = app.state.proxy_manager.status()
     logger.info("Proxy pool: %d active, %d dead", proxy_status["active"], proxy_status["dead"])
 
-    zepto_proxy_file = os.getenv("ZEPTO_PROXY_FILE", "zepto_proxies.txt")
-    app.state.zepto_proxy_manager = ProxyManager(zepto_proxy_file)
-    app.state.zepto_proxy_manager_task = asyncio.create_task(app.state.zepto_proxy_manager.resurrect_loop())
+    # Zepto now shares the main Webshare proxy pool (BrightData removed).
+    # Keep the attribute name for backwards compat with routes/scheduler.
+    app.state.zepto_proxy_manager = app.state.proxy_manager
 
     # Initialize Google Sheets client and Thread Pool
     # Size to cover simultaneous Blinkit + Zepto executor concurrency plus headroom.
@@ -225,11 +225,11 @@ async def lifespan(app: FastAPI):
     app.state.instamart_cron_task = None
     app.state.flipkart_minutes_cron_task = None
 
-    # FK Minutes: load cookie, refresh at-JWT if stale
+    # FK Minutes: load cookie, refresh at-JWT if stale, or bootstrap if missing
     app.state.fkm_cookie_lock = asyncio.Lock()
     _fkm_raw = os.getenv("FLIPKART_MINUTES_COOKIES", "")
     if _fkm_raw:
-        from flipkart_minutes.cookie_manager import needs_refresh, refresh_fkm_cookies
+        from flipkart_minutes.cookie_manager import needs_refresh, refresh_fkm_cookies, at_expiry
         if needs_refresh(_fkm_raw):
             try:
                 _fkm_raw = await refresh_fkm_cookies(_fkm_raw)
@@ -237,11 +237,17 @@ async def lifespan(app: FastAPI):
             except Exception as _e:
                 logger.warning("[FKM] Cookie refresh on startup failed: %s", _e)
         else:
-            from flipkart_minutes.cookie_manager import at_expiry
             _exp = at_expiry(_fkm_raw)
             logger.info("[FKM] Cookie loaded — at expires %s", _exp.isoformat() if _exp else "unknown")
-    else:
-        logger.warning("[FKM] FLIPKART_MINUTES_COOKIES not set — FK Minutes will error on use")
+            
+    # If no .env cookie, or refresh failed to give a valid cookie, use Playwright to bootstrap one
+    if not _fkm_raw or "at=" not in _fkm_raw:
+        from flipkart_minutes.cookie_manager import bootstrap_fkm_cookies
+        if app.state.browser_manager:
+            _fkm_raw = await bootstrap_fkm_cookies(app.state.browser_manager, pincode="560102")
+        else:
+            logger.warning("[FKM] FLIPKART_MINUTES_COOKIES missing and browser pool failed; FK Minutes will error")
+
     app.state.fkm_cookies = _fkm_raw
 
     app.state.cron_scheduler = setup_scheduler(app)

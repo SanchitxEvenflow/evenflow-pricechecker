@@ -19,6 +19,7 @@ PUBLIC_ROUTES = {
     ("GET", "/openapi.json"),
     ("GET", "/redoc"),
     ("POST", "/auth/login"),
+    ("GET", "/"),
 }
 
 # Paths that must load before a user can authenticate — static assets + the login page itself
@@ -44,6 +45,8 @@ def is_public_route(method: str, path: str) -> bool:
     if path.startswith("/docs") or path.startswith("/redoc"):
         return True
     if any(path.startswith(p) for p in _STATIC_PREFIXES):
+        return True
+    if path.endswith((".png", ".jpg", ".jpeg", ".svg", ".ico", ".css", ".js", ".woff", ".woff2", ".txt")):
         return True
     return False
 

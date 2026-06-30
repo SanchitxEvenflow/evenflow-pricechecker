@@ -167,8 +167,6 @@ class ZeptoResponse(ZeptoCityResult):
 class InstamartRequest(BaseModel):
     product_id: str
     city: str
-    # address is required by the scraper contract
-    address: str
 
 
 class InstamartAllCitiesRequest(BaseModel):

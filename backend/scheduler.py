@@ -737,18 +737,23 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str) -> Non
         batch_updates = []
         BATCH_SIZE = 100  # Google Sheets API batch limit
 
+        loop = asyncio.get_running_loop()
+
         async def scrape_one_city(pid_: str, loc: dict, target_variant_name: str | None = None) -> tuple[str, dict]:
             async with batch_context(app.state):
                 try:
-                    result = await fetch_instamart_data(
-                        item_id=pid_,
-                        lat=loc["lat"],
-                        lon=loc["lng"],
-                        city=loc["name"],
-                        store_id=loc.get("store_id", ""),
-                        browser=get_browser(app.state),
-                        proxy_manager=proxy_manager,
-                        target_variant_name=target_variant_name,
+                    result = await loop.run_in_executor(
+                        app.state.thread_pool,
+                        partial(
+                            fetch_instamart_data,
+                            item_id=pid_,
+                            lat=loc["lat"],
+                            lon=loc["lng"],
+                            city=loc["name"],
+                            store_id=loc.get("store_id", ""),
+                            proxy_manager=proxy_manager,
+                            target_variant_name=target_variant_name,
+                        ),
                     )
                 except Exception:
                     result = {"city": loc["name"], "status": "error"}
