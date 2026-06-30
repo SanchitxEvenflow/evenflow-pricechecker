@@ -159,7 +159,7 @@ class GoogleSheetsClient:
         city_cols = []
         for city in BLINKIT_CITIES:
             city_cols.extend([f"{city} Price", f"{city} MRP", f"{city} Status"])
-        header = ["PID"] + city_cols
+        header = ["PID"] + city_cols + ["Checked At"] + ["Checked At"]
         rows: list[list[str]] = [header] + [[pid] for pid in pids]
         self.service.spreadsheets().values().update(
             spreadsheetId=spreadsheet_id,
@@ -202,7 +202,7 @@ class GoogleSheetsClient:
         city_cols = []
         for city in ZEPTO_CITIES:
             city_cols.extend([f"{city} Price", f"{city} MRP", f"{city} Status"])
-        header = ["PID"] + city_cols
+        header = ["PID"] + city_cols + ["Checked At"]
         rows: list[list[str]] = [header] + [[pid] for pid in pids]
         self.service.spreadsheets().values().update(
             spreadsheetId=spreadsheet_id,
@@ -318,7 +318,7 @@ class GoogleSheetsClient:
         city_cols = []
         for city in INSTAMART_CITIES:
             city_cols.extend([f"{city} Price", f"{city} MRP", f"{city} Status"])
-        header = ["PID"] + city_cols
+        header = ["PID"] + city_cols + ["Checked At"]
         rows: list[list[str]] = [header] + [[pid] for pid in pids]
         self.service.spreadsheets().values().update(
             spreadsheetId=spreadsheet_id,

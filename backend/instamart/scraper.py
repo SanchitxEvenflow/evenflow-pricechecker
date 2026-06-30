@@ -45,7 +45,73 @@ _BASE_HEADERS = {
 }
 
 
-# ── JSON extraction helpers (preserved from Playwright version) ────────────
+# ── SSR state extraction ───────────────────────────────────────────────────
+
+_ASSIGN_RE = re.compile(r"window\.___INITIAL_STATE___\s*=\s*")
+
+
+def _extract_initial_state(script: str) -> dict:
+    """
+    Brace-aware extraction of window.___INITIAL_STATE___ from a script block.
+
+    Uses regex only to locate the assignment, then manually tracks open/close
+    braces and brackets (respecting strings and escapes) to find the exact end
+    of the JSON payload.  This is robust to minification changes and arbitrary
+    JS that follows the assignment.
+    """
+    m = _ASSIGN_RE.search(script)
+    if not m:
+        raise ValueError("initial_state_assignment_not_found")
+
+    i = m.end()
+    n = len(script)
+
+    while i < n and script[i].isspace():
+        i += 1
+
+    if i >= n or script[i] not in "{[":
+        raise ValueError("initial_state_not_json_like")
+
+    start = i
+    stack = [script[i]]
+    i += 1
+
+    in_string = False
+    quote = ""
+    escaped = False
+
+    while i < n:
+        ch = script[i]
+
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                in_string = False
+        else:
+            if ch in ('"', "'"):
+                in_string = True
+                quote = ch
+            elif ch in "{[":
+                stack.append(ch)
+            elif ch in "}]":
+                if not stack:
+                    raise ValueError("unexpected_closing_brace")
+                opening = stack.pop()
+                if (opening, ch) not in {("{", "}"), ("[", "]")}:
+                    raise ValueError("mismatched_braces")
+                if not stack:
+                    payload = script[start : i + 1]
+                    return json.loads(payload)
+
+        i += 1
+
+    raise ValueError("initial_state_unterminated")
+
+
+# ── JSON tree helpers ──────────────────────────────────────────────────────
 
 
 def _find_items(obj, tgt_id: str) -> list:
@@ -72,11 +138,15 @@ def _extract_price_and_stock(item: dict, target_variant_name: str | None = None)
     # ── Variant selection (cheapest by default, or match target name) ──
     v = item
     if item.get("variations"):
-        variations = item["variations"]
+        variations = list(item["variations"])  # copy — avoid mutating state tree
 
         def _get_price(var):
             p = var.get("price", {})
-            val = p.get("offerPrice", {}).get("units") or p.get("mrp", {}).get("units") or float("inf")
+            val = (
+                p.get("offerPrice", {}).get("units")
+                or p.get("mrp", {}).get("units")
+                or float("inf")
+            )
             return float(val)
 
         variations.sort(key=_get_price)
@@ -98,13 +168,13 @@ def _extract_price_and_stock(item: dict, target_variant_name: str | None = None)
 
     if price_obj:
         o_price = price_obj.get("offerPrice", {}).get("units")
-        if o_price:
+        if o_price is not None:
             price = float(o_price)
         m_price = price_obj.get("mrp", {}).get("units")
-        if m_price:
+        if m_price is not None:
             mrp = float(m_price)
 
-    if not mrp and price:
+    if mrp is None and price is not None:
         mrp = price
 
     # ── Stock status ──
@@ -195,7 +265,10 @@ def fetch_instamart_data(
 
             # ── Bot / error page detection ─────────────────────────────────
             if response.status_code in (401, 403, 429):
-                logger.warning("[Instamart] %s: blocked (HTTP %d) on attempt %d", city, response.status_code, attempt + 1)
+                logger.warning(
+                    "[Instamart] %s: blocked (HTTP %d) on attempt %d",
+                    city, response.status_code, attempt + 1,
+                )
                 if proxy_manager:
                     proxy_manager.report_failure(proxy)
                 if attempt < max_proxy_attempts:
@@ -240,7 +313,10 @@ def fetch_instamart_data(
 
             if not target_script:
                 if has_initial_state:
-                    logger.info("[Instamart] %s: initial state found but item_id missing — item not available", city)
+                    logger.info(
+                        "[Instamart] %s: initial state found but item_id missing — item not available",
+                        city,
+                    )
                     if proxy_manager:
                         proxy_manager.report_success(proxy)
                     return {
@@ -266,22 +342,18 @@ def fetch_instamart_data(
                         continue
                     return _error_result("state_script_not_found")
 
-            # ── Extract and parse the embedded JSON ───────────────────────
-            match = re.search(
-                r"window\.___INITIAL_STATE___\s*=\s*(.*?);\s*(?:window\.|var\s|let\s|const\s)",
-                target_script,
-                re.DOTALL,
-            )
-            if not match:
-                logger.warning("[Instamart] %s: failed to regex JSON from script", city)
+            # ── Extract and parse the embedded JSON (brace-aware) ─────────
+            try:
+                data = _extract_initial_state(target_script)
+            except ValueError as exc:
+                logger.warning(
+                    "[Instamart] %s: failed to extract state JSON — %s", city, exc
+                )
                 if proxy_manager:
                     proxy_manager.report_failure(proxy)
                 if attempt < max_proxy_attempts:
                     continue
-                return _error_result("json_regex_failed")
-
-            try:
-                data = json.loads(match.group(1))
+                return _error_result(f"json_extract_failed: {exc}")
             except json.JSONDecodeError:
                 logger.warning("[Instamart] %s: invalid JSON in embedded state", city)
                 if proxy_manager:
@@ -293,7 +365,9 @@ def fetch_instamart_data(
             # ── Find the product node in the state tree ───────────────────
             items = _find_items(data, item_id)
             if not items:
-                logger.warning("[Instamart] %s: item %s not found in parsed state", city, item_id)
+                logger.warning(
+                    "[Instamart] %s: item %s not found in parsed state", city, item_id
+                )
                 if proxy_manager:
                     proxy_manager.report_success(proxy)
                 return {
@@ -349,7 +423,9 @@ def fetch_instamart_data(
             return _error_result(f"network_error: {e}")
 
         except Exception as e:
-            logger.error("[Instamart] %s: unexpected error on attempt %d — %s", city, attempt + 1, e)
+            logger.error(
+                "[Instamart] %s: unexpected error on attempt %d — %s", city, attempt + 1, e
+            )
             if proxy_manager:
                 proxy_manager.report_failure(proxy)
             if attempt < max_proxy_attempts:

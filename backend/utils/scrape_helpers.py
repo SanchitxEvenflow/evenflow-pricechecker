@@ -98,7 +98,7 @@ def format_breakdown(breakdown: dict | None) -> str:
 def format_blinkit_row(results_by_city: dict) -> list:
     """Flatten per-city Blinkit results into a single sheet row.
 
-    Returns a list of 30 values: [price, mrp, status] × 10 cities in BLINKIT_CITIES order.
+    Returns a list of [price, mrp, status] × N cities + checked_at.
     """
     values = []
     for city in BLINKIT_CITIES:
@@ -111,13 +111,15 @@ def format_blinkit_row(results_by_city: dict) -> list:
             f"{mrp:.2f}" if mrp is not None else "",
             status,
         ])
+    timestamps = [r.get("checked_at") for r in results_by_city.values() if r.get("checked_at")]
+    values.append(max(timestamps) if timestamps else "")
     return values
 
 
 def format_zepto_row(results_by_city: dict) -> list:
     """Flatten per-city Zepto results into a single sheet row.
 
-    Returns a list of 27 values: [price, mrp, status] × 9 cities in ZEPTO_CITIES order.
+    Returns a list of [price, mrp, status] × N cities + checked_at.
     """
     values = []
     for city in ZEPTO_CITIES:
@@ -130,6 +132,8 @@ def format_zepto_row(results_by_city: dict) -> list:
             f"{mrp:.2f}" if mrp is not None else "",
             status,
         ])
+    timestamps = [r.get("checked_at") for r in results_by_city.values() if r.get("checked_at")]
+    values.append(max(timestamps) if timestamps else "")
     return values
 
 
@@ -169,14 +173,7 @@ def format_flipkart_update(res: dict) -> dict:
 def format_instamart_row(results_by_city: dict) -> list:
     """Flatten per-city Instamart results into a single sheet row.
 
-    Returns a list of 30 values: [price, mrp, status] × 10 cities in INSTAMART_CITIES order.
-
-    Expected city result shape:
-      {
-        "price": float|None,
-        "mrp": float|None,
-        "status": str
-      }
+    Returns a list of [price, mrp, status] × N cities + checked_at.
     """
     values: list[str] = []
     for city in INSTAMART_CITIES:
@@ -189,6 +186,8 @@ def format_instamart_row(results_by_city: dict) -> list:
             f"{mrp:.2f}" if mrp is not None else "",
             status,
         ])
+    timestamps = [r.get("checked_at") for r in results_by_city.values() if r.get("checked_at")]
+    values.append(max(timestamps) if timestamps else "")
     return values
 
 

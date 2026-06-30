@@ -230,7 +230,7 @@ async def run_manual_trigger(app) -> None:
     await _run_full_scrape(app, tab_prefix="Manual_Trigger", run_type="manual", write_historical=False)
 
 
-async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str) -> None:
+async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str, write_historical: bool = False) -> None:
     """Core scrape logic for Blinkit sheet-based runs.
 
     Reads PIDs from BLINKIT_SHEET_ID / BLINKIT_SOURCE_TAB, scrapes all 10 cities
@@ -348,6 +348,7 @@ async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str) -> None:
         total_success = 0
         total_failed = 0
         batch_updates = []
+        historical_rows: list[list] = []
         BATCH_SIZE = 100
 
         pid_index: dict[str, int] = {pid: i for i, pid in enumerate(pids)}
@@ -392,10 +393,12 @@ async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str) -> None:
                 app.state.blinkit_cron_status["progress"] = total_done
                 run_logger.update_progress(run_id, total_success, total_failed)
 
+                row_values = format_blinkit_row(city_results)
                 batch_updates.append({
                     "row": i + 2,
-                    "values": format_blinkit_row(city_results),
+                    "values": row_values,
                 })
+                historical_rows.append([pid] + row_values + [new_tab])
 
                 should_flush = (len(batch_updates) == BATCH_SIZE) or (total_done == len(pids))
                 if should_flush:
@@ -419,6 +422,19 @@ async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str) -> None:
                         logger.info("Blinkit: flushed final %d rows on shutdown", len(batch_updates))
                     except (Exception, asyncio.CancelledError):
                         logger.exception("Blinkit: final flush failed on shutdown")
+                hist_tab = os.getenv("BLINKIT_HISTORICAL_TAB", "HISTORY")
+                if write_historical and historical_rows:
+                    try:
+                        loop = asyncio.get_running_loop()
+                        existing = await loop.run_in_executor(None, sheets_client.list_tabs, sheet_id)
+                        if hist_tab not in existing:
+                            await loop.run_in_executor(None, sheets_client.create_tab, sheet_id, hist_tab)
+                        await sheets_client.async_append_to_historical(sheet_id, hist_tab, historical_rows)
+                        logger.info("Blinkit: appended %d rows to '%s'", len(historical_rows), hist_tab)
+                    except (Exception, asyncio.CancelledError):
+                        logger.exception("Blinkit: failed to append to historical tab '%s'", hist_tab)
+                elif not write_historical:
+                    logger.info("Blinkit: skipping historical append (manual trigger)")
             finally:
                 run_logger.complete_log(run_id, total_success, total_failed, new_tab)
 
@@ -439,13 +455,21 @@ async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str) -> None:
         app.state.blinkit_cron_status["is_running"] = False
 
 
+async def run_scheduled_blinkit_scrape(app) -> None:
+    """Called by APScheduler on cron intervals."""
+    if app.state.blinkit_cron_status.get("is_running"):
+        logger.warning("Blinkit: scheduled scrape skipped — a run is already active (duplicate trigger?)")
+        return
+    await _run_full_blinkit_scrape(app, tab_prefix="Blinkit_Run", run_type="blinkit_automatic", write_historical=True)
+
+
 async def run_manual_blinkit_trigger(app) -> None:
     """Called when user manually triggers the Blinkit full scrape from the UI."""
     await asyncio.sleep(0.1)
     await _run_full_blinkit_scrape(app, tab_prefix="Blinkit_Manual", run_type="blinkit_manual")
 
 
-async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str) -> None:
+async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str, write_historical: bool = False) -> None:
     """Core scrape logic for Zepto sheet-based runs."""
     # Synchronous guard + lock. No await between check and set → no race in single-threaded asyncio.
     if app.state.zepto_cron_status.get("is_running"):
@@ -566,6 +590,7 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str) -> None:
         total_success = 0
         total_failed = 0
         batch_updates = []
+        historical_rows: list[list] = []
         BATCH_SIZE = 100
 
         pid_index: dict[str, int] = {pid: i for i, pid in enumerate(pids)}
@@ -609,10 +634,12 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str) -> None:
                 app.state.zepto_cron_status["progress"] = total_done
                 run_logger.update_progress(run_id, total_success, total_failed)
 
+                row_values = format_zepto_row(city_results)
                 batch_updates.append({
                     "row": i + 2,
-                    "values": format_zepto_row(city_results),
+                    "values": row_values,
                 })
+                historical_rows.append([pid] + row_values + [new_tab])
 
                 should_flush = (len(batch_updates) == BATCH_SIZE) or (total_done == len(pids))
                 if should_flush:
@@ -636,6 +663,19 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str) -> None:
                         logger.info("Zepto: flushed final %d rows on shutdown", len(batch_updates))
                     except (Exception, asyncio.CancelledError):
                         logger.exception("Zepto: final flush failed on shutdown")
+                hist_tab = os.getenv("ZEPTO_HISTORICAL_TAB", "HISTORY")
+                if write_historical and historical_rows:
+                    try:
+                        loop = asyncio.get_running_loop()
+                        existing = await loop.run_in_executor(None, sheets_client.list_tabs, sheet_id)
+                        if hist_tab not in existing:
+                            await loop.run_in_executor(None, sheets_client.create_tab, sheet_id, hist_tab)
+                        await sheets_client.async_append_to_historical(sheet_id, hist_tab, historical_rows)
+                        logger.info("Zepto: appended %d rows to '%s'", len(historical_rows), hist_tab)
+                    except (Exception, asyncio.CancelledError):
+                        logger.exception("Zepto: failed to append to historical tab '%s'", hist_tab)
+                elif not write_historical:
+                    logger.info("Zepto: skipping historical append (manual trigger)")
             finally:
                 run_logger.complete_log(run_id, total_success, total_failed, new_tab)
 
@@ -654,13 +694,21 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str) -> None:
         app.state.zepto_cron_status["is_running"] = False
 
 
+async def run_scheduled_zepto_scrape(app) -> None:
+    """Called by APScheduler on cron intervals."""
+    if app.state.zepto_cron_status.get("is_running"):
+        logger.warning("Zepto: scheduled scrape skipped — a run is already active (duplicate trigger?)")
+        return
+    await _run_full_zepto_scrape(app, tab_prefix="Zepto_Run", run_type="zepto_automatic", write_historical=True)
+
+
 async def run_manual_zepto_trigger(app) -> None:
     """Called when user manually triggers the Zepto full scrape from the UI."""
     await asyncio.sleep(0.1)
     await _run_full_zepto_scrape(app, tab_prefix="Zepto_Manual", run_type="zepto_manual")
 
 
-async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str) -> None:
+async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str, write_historical: bool = False) -> None:
     """Core scrape logic for Instamart sheet-based runs.
 
     Reads PIDs from INSTAMART_SHEET_ID / INSTAMART_SOURCE_TAB, scrapes each PID
@@ -735,6 +783,7 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str) -> Non
         total_success = 0
         total_failed = 0
         batch_updates = []
+        historical_rows: list[list] = []
         BATCH_SIZE = 100  # Google Sheets API batch limit
 
         loop = asyncio.get_running_loop()
@@ -833,10 +882,12 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str) -> Non
                 app.state.instamart_cron_status["progress"] = total_done
                 run_logger.update_progress(run_id, total_success, total_failed)
 
+                row_values = format_instamart_row(city_results)
                 batch_updates.append({
                     "row": i + 2,
-                    "values": format_instamart_row(city_results),
+                    "values": row_values,
                 })
+                historical_rows.append([pid] + row_values + [new_tab])
 
                 should_flush = (len(batch_updates) == BATCH_SIZE) or (total_done == len(pids))
                 if should_flush:
@@ -862,6 +913,19 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str) -> Non
                         logger.info("Instamart: flushed final %d rows on shutdown", len(batch_updates))
                     except (Exception, asyncio.CancelledError):
                         logger.exception("Instamart: final flush failed on shutdown")
+                hist_tab = os.getenv("INSTAMART_HISTORICAL_TAB", "HISTORY")
+                if write_historical and historical_rows:
+                    try:
+                        loop = asyncio.get_running_loop()
+                        existing = await loop.run_in_executor(None, sheets_client.list_tabs, sheet_id)
+                        if hist_tab not in existing:
+                            await loop.run_in_executor(None, sheets_client.create_tab, sheet_id, hist_tab)
+                        await sheets_client.async_append_to_historical(sheet_id, hist_tab, historical_rows)
+                        logger.info("Instamart: appended %d rows to '%s'", len(historical_rows), hist_tab)
+                    except (Exception, asyncio.CancelledError):
+                        logger.exception("Instamart: failed to append to historical tab '%s'", hist_tab)
+                elif not write_historical:
+                    logger.info("Instamart: skipping historical append (manual trigger)")
             finally:
                 run_logger.complete_log(run_id, total_success, total_failed, new_tab)
 
@@ -891,7 +955,7 @@ async def run_scheduled_instamart_scrape(app) -> None:
     if app.state.instamart_cron_status.get("is_running"):
         logger.warning("Instamart: scheduled scrape skipped — a run is already active (duplicate trigger?)")
         return
-    await _run_full_instamart_scrape(app, tab_prefix="Instamart_Run", run_type="instamart_automatic")
+    await _run_full_instamart_scrape(app, tab_prefix="Instamart_Run", run_type="instamart_automatic", write_historical=True)
 
 
 async def run_manual_instamart_trigger(app) -> None:
@@ -1349,7 +1413,33 @@ def setup_scheduler(app) -> AsyncIOScheduler | None:
         max_instances=1,
         coalesce=True,
     )
-    
+
+    blinkit_cron_hour = int(os.getenv("BLINKIT_CRON_HOUR", "9"))
+    blinkit_cron_minute = int(os.getenv("BLINKIT_CRON_MINUTE", "30"))
+    scheduler.add_job(
+        run_scheduled_blinkit_scrape,
+        "cron",
+        hour=blinkit_cron_hour,
+        minute=blinkit_cron_minute,
+        args=[app],
+        id="blinkit_daily_scrape",
+        max_instances=1,
+        coalesce=True,
+    )
+
+    zepto_cron_hour = int(os.getenv("ZEPTO_CRON_HOUR", "10"))
+    zepto_cron_minute = int(os.getenv("ZEPTO_CRON_MINUTE", "0"))
+    scheduler.add_job(
+        run_scheduled_zepto_scrape,
+        "cron",
+        hour=zepto_cron_hour,
+        minute=zepto_cron_minute,
+        args=[app],
+        id="zepto_daily_scrape",
+        max_instances=1,
+        coalesce=True,
+    )
+
     async def _refresh_fkm_cookies_job():
         from flipkart_minutes.cookie_manager import refresh_fkm_cookies, needs_refresh
         try:
@@ -1378,5 +1468,7 @@ def setup_scheduler(app) -> AsyncIOScheduler | None:
     logger.info("Cron: Amazon daily scrape scheduled at %02d:%02d IST", cron_hour, cron_minute)
     logger.info("Cron: Flipkart daily scrape scheduled at %02d:%02d IST", flipkart_cron_hour, flipkart_cron_minute)
     logger.info("Cron: Instamart daily scrape scheduled at %02d:%02d IST", instamart_cron_hour, instamart_cron_minute)
+    logger.info("Cron: Blinkit daily scrape scheduled at %02d:%02d IST", blinkit_cron_hour, blinkit_cron_minute)
+    logger.info("Cron: Zepto daily scrape scheduled at %02d:%02d IST", zepto_cron_hour, zepto_cron_minute)
     logger.info("Cron: FK Minutes cookie refresh scheduled every 14 days")
     return scheduler
