@@ -121,7 +121,6 @@ async def lifespan(app: FastAPI):
         "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
         "--disable-gpu",
-        "--no-zygote",
         "--disable-blink-features=AutomationControlled",
         "--disable-infobars",
         "--window-size=1920,1080",
