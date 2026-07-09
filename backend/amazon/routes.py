@@ -125,7 +125,7 @@ async def get_config():
 async def list_tabs(sheet_id: str, sheets_client: GoogleSheetsClient = Depends(get_sheets_client)):
     """Returns all tab names in the spreadsheet — use this to find the correct tab name."""
     try:
-        tabs = sheets_client.list_tabs(sheet_id)
+        tabs = await asyncio.get_running_loop().run_in_executor(None, sheets_client.list_tabs, sheet_id)
         return {"status": "success", "tabs": tabs}
     except Exception as e:
         logger.exception("Failed to list tabs")
@@ -134,7 +134,8 @@ async def list_tabs(sheet_id: str, sheets_client: GoogleSheetsClient = Depends(g
 @sheets_router.post("/preview", response_model=PreviewResponse)
 async def preview_sheet(body: PreviewRequest, sheets_client: GoogleSheetsClient = Depends(get_sheets_client)):
     try:
-        asins = sheets_client.get_asins_with_rows(body.sheet_id, body.tab_name)
+        asins = await asyncio.get_running_loop().run_in_executor(
+            None, sheets_client.get_asins_with_rows, body.sheet_id, body.tab_name)
         return PreviewResponse(
             status="success",
             total_rows=len(asins),
@@ -153,7 +154,8 @@ async def get_amazon_products(sheets_client: GoogleSheetsClient = Depends(get_sh
     if not sheet_id:
         raise HTTPException(status_code=503, detail="Amazon sheet not configured (set SPREADSHEET_ID)")
     try:
-        return sheets_client.get_products_from_sheet(sheet_id, source_tab)
+        return await asyncio.get_running_loop().run_in_executor(
+            None, sheets_client.get_products_from_sheet, sheet_id, source_tab)
     except Exception as e:
         logger.exception("Failed to fetch Amazon products")
         raise HTTPException(status_code=500, detail=str(e))
@@ -255,7 +257,7 @@ async def scrape_batch(
 
         if len(pending_writes) >= CHUNK_SIZE:
             try:
-                sheets_client.batch_update_rows(body.sheet_id, body.tab_name, pending_writes)
+                await sheets_client.async_batch_update_rows(body.sheet_id, body.tab_name, pending_writes)
                 logger.info("scrape_batch: wrote %d rows (%d/%d done)",
                             len(pending_writes), len(all_results), len(body.rows))
             except Exception:
@@ -264,7 +266,7 @@ async def scrape_batch(
 
     if pending_writes:
         try:
-            sheets_client.batch_update_rows(body.sheet_id, body.tab_name, pending_writes)
+            await sheets_client.async_batch_update_rows(body.sheet_id, body.tab_name, pending_writes)
             logger.info("scrape_batch: wrote final %d rows", len(pending_writes))
         except Exception:
             logger.exception("scrape_batch: final sheets write failed")
@@ -316,7 +318,7 @@ async def scrape_batch_stream(
 
             if len(pending_updates) >= CHUNK_SIZE or done == total:
                 try:
-                    sheets_client.batch_update_rows(body.sheet_id, body.tab_name, pending_updates)
+                    await sheets_client.async_batch_update_rows(body.sheet_id, body.tab_name, pending_updates)
                     logger.info("Stream: wrote %d rows to sheets (%d/%d done)", len(pending_updates), done, total)
                 except Exception:
                     logger.exception("Stream: sheets write failed at progress %d/%d", done, total)

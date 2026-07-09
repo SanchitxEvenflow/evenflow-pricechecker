@@ -37,3 +37,6 @@ backend/scraper_logs.jsongoogle_service_account.json
 backend/google_service_account.json
 
 .serena
+.dual-graph/
+.tokensave
+.CLAUDE.md
