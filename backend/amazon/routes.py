@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from amazon.scraper import scrape_amazon, fetch_curl_supplement, merge_curl_supplement
 from schemas.price import AmazonRequest, AmazonResponse
 from utils.google_sheets import GoogleSheetsClient
-from utils.scrape_helpers import CHUNK_SIZE, batch_context, format_update, get_browser, sem_with_timeout
+from utils.scrape_helpers import CHUNK_SIZE, SCRAPE_CONCURRENCY, batch_context, format_update, get_browser, sem_with_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -312,7 +312,11 @@ async def scrape_batch_stream(
         pending_updates: list[dict] = []
 
         while done < total:
-            result = await queue.get()
+            try:
+                result = await asyncio.wait_for(queue.get(), timeout=15)
+            except asyncio.TimeoutError:
+                yield ": keep-alive\n\n"
+                continue
             done += 1
             pending_updates.append(_format_update(result))
 
@@ -389,49 +393,83 @@ async def scrape_manual(body: ManualScrapeRequest, request: Request):
             "checked_at": "",
         })
 
-    async def worker(asin: str) -> None:
+    # Bounded worker pool: exactly N workers drain a shared ASIN queue instead of
+    # spawning one task per ASIN. At 800 ASINs this is what keeps us safe —
+    # workers block on total_sem (the global browser hard-cap) with no per-task
+    # acquire deadline, so no ASIN is ever dropped and the stream always completes.
+    asins_in: asyncio.Queue = asyncio.Queue()
+    for asin in clean_asins:
+        asins_in.put_nowait(asin)
+
+    async def scrape_one(asin: str) -> dict:
         cache = getattr(app_state, "cache", None)
         cache_key = f"amazon_{asin}"
-        
+
         if cache is not None and cache_key in cache:
-            result = cache[cache_key].copy()
-        else:
-            async with batch_context(app_state):
-                result = await scrape_amazon(asin, get_browser(app_state), proxy_manager, skip_curl=True, browser_manager=app_state.browser_manager)
+            return cache[cache_key].copy()
+
+        # total_sem is the global hard cap on live browser contexts. Plain acquire
+        # (no timeout): MANUAL_RESERVED guarantees batch runs can never hold every
+        # slot, so a manual worker always gets one within one scrape-cycle.
+        async with app_state.total_sem:
+            result = await scrape_amazon(
+                asin, get_browser(app_state), proxy_manager,
+                skip_curl=True, browser_manager=app_state.browser_manager,
+            )
+        try:
+            cookies = result.pop("_cookies", {}) or {}
+            if cookies:
+                curl_data = await fetch_curl_supplement(asin, cookies)
+                merge_curl_supplement(result, curl_data)
+        except Exception:
+            logger.exception("scrape_manual: curl supplement failed for ASIN %s", asin)
+
+        if cache is not None and result.get("status") not in ("error", "invalid_format"):
+            cache[cache_key] = result.copy()
+        return result
+
+    async def worker() -> None:
+        while True:
             try:
-                cookies = result.pop("_cookies", {}) or {}
-                if cookies:
-                    curl_data = await fetch_curl_supplement(asin, cookies)
-                    merge_curl_supplement(result, curl_data)
+                asin = asins_in.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            # Fallback result so a crash still emits exactly one message per ASIN —
+            # the stream counts to `total` and would hang forever if any were lost.
+            result = {
+                "asin": asin, "price": "", "rating": None, "rating_count": None,
+                "status": "error", "url": "", "checked_at": "",
+            }
+            try:
+                scraped = await scrape_one(asin)
+                if scraped:
+                    result = scraped
+            except asyncio.CancelledError:
+                raise  # client disconnected — don't emit, let cancellation propagate
             except Exception:
-                logger.exception("scrape_manual: curl supplement failed for ASIN %s", asin)
-            
-            if cache is not None and result.get("status") not in ("error", "invalid_format"):
-                cache[cache_key] = result.copy()
-                
-        await queue.put(result)
+                logger.exception("scrape_manual: worker failed for ASIN %s", asin)
+            await queue.put(result)
 
     async def event_stream():
-        tasks = [asyncio.create_task(worker(a)) for a in clean_asins]
-        done = len(invalid_asins)  # invalid ones are already queued
-
-        # Yield invalid results immediately
-        for _ in range(len(invalid_asins)):
-            result = await queue.get()
-            done_count = _ + 1
-            payload = json.dumps({**result, "progress": done_count, "total": total})
-            yield f"data: {payload}\n\n"
-
-        # Yield scraped results as they complete
-        scraped_done = 0
-        while scraped_done < len(clean_asins):
-            result = await queue.get()
-            scraped_done += 1
-            progress = len(invalid_asins) + scraped_done
-            payload = json.dumps({**result, "progress": progress, "total": total})
-            yield f"data: {payload}\n\n"
-
-        await asyncio.gather(*tasks, return_exceptions=True)
-        yield f"data: {json.dumps({'done': True, 'total': total})}\n\n"
+        n_workers = min(SCRAPE_CONCURRENCY, len(clean_asins))
+        workers = [asyncio.create_task(worker()) for _ in range(n_workers)]
+        try:
+            emitted = 0
+            while emitted < total:
+                try:
+                    result = await asyncio.wait_for(queue.get(), timeout=15)
+                except asyncio.TimeoutError:
+                    yield ": keep-alive\n\n"
+                    continue
+                emitted += 1
+                payload = json.dumps({**result, "progress": emitted, "total": total})
+                yield f"data: {payload}\n\n"
+            yield f"data: {json.dumps({'done': True, 'total': total})}\n\n"
+        finally:
+            # Normal end (workers already done) or client disconnect: cancel any
+            # stragglers so we never orphan browser/proxy work after the socket closes.
+            for w in workers:
+                w.cancel()
+            await asyncio.gather(*workers, return_exceptions=True)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
