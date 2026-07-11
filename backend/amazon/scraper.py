@@ -461,9 +461,7 @@ async def scrape_amazon(
         "platform": "amazon", "url": url,
     }
 
-    # ponytail: pool line count is meaningless for a rotating gateway (fresh IP
-    # per connection) — cap retries at 3 outright, revisit if discrete proxies return.
-    max_proxy_attempts = 3 if proxy_manager.active_pool else 0
+    max_proxy_attempts = min(3, len(proxy_manager.active_pool) or 1)
     context = None
 
     for attempt in range(max_proxy_attempts + 1):  # +1 = direct-connection fallback

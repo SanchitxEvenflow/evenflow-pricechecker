@@ -1,6 +1,7 @@
 """Thread-safe proxy pool manager with round-robin selection and failure tracking."""
 
 import logging
+import os
 import threading
 import time
 from pathlib import Path
@@ -14,6 +15,10 @@ logger = logging.getLogger(__name__)
 class ProxyManager:
     """Manages a rotating pool of HTTP proxies with failure tracking and cooldown."""
 
+    # Webshare "direct connection" list — all 100 discrete IPs in one page.
+    _API_URL = "https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&page=1&page_size=100"
+    _API_REFRESH_SECS = 21600  # Re-pull every 6h so 7-day IP rotation doesn't shrink the pool.
+
     def __init__(self, proxy_file: str = "proxies.txt") -> None:
         self._lock = threading.Lock()
         self.active_pool: list[str] = []
@@ -22,8 +27,65 @@ class ProxyManager:
         self.index: int = 0
         self._last_revive_check: float = time.time()  # Throttle revival checks
         self._revive_check_interval: float = 30.0  # Check every 30 seconds
+        self._api_key: str | None = os.getenv("WBBSHARE_API")
+        self._last_api_refresh: float = time.time()
 
-        self._load_proxies(proxy_file)
+        # Prefer Webshare API (100 discrete direct IPs, always current) over the
+        # static file — the file only holds the rotating gateway, which funnels
+        # everything through one backbone and turns per-proxy tracking inert.
+        if self._api_key:
+            self._load_from_api()
+        if not self.active_pool:
+            self._load_proxies(proxy_file)
+
+    @staticmethod
+    def _parse_api_results(results: list[dict]) -> list[str]:
+        """Convert Webshare API entries to http://user:pass@ip:port strings."""
+        proxies = []
+        for p in results:
+            if not p.get("valid", True):
+                continue
+            proxies.append(f"http://{p['username']}:{p['password']}@{p['proxy_address']}:{p['port']}")
+        return proxies
+
+    def _load_from_api(self) -> None:
+        """Fetch the current proxy list from Webshare at startup (blocking)."""
+        import json
+        import urllib.request
+
+        req = urllib.request.Request(self._API_URL, headers={"Authorization": f"Token {self._api_key}"})
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode())
+        except Exception as e:  # ponytail: any failure → fall back to proxy file, never crash startup
+            logger.warning("Webshare API fetch failed (%s) — falling back to proxy file", e)
+            return
+        for proxy_url in self._parse_api_results(data.get("results", [])):
+            self.active_pool.append(proxy_url)
+            self.failure_count[proxy_url] = 0
+        logger.info("Loaded %d proxies from Webshare API", len(self.active_pool))
+
+    async def _refresh_from_api(self, aiohttp) -> None:
+        """Re-fetch the list and add any proxies not already tracked (handles 7-day rotation)."""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    self._API_URL, headers={"Authorization": f"Token {self._api_key}"}, timeout=15
+                ) as resp:
+                    data = await resp.json()
+        except Exception as e:
+            logger.warning("Webshare API refresh failed: %s", e)
+            return
+        added = 0
+        with self._lock:
+            known = set(self.active_pool) | set(self.dead_pool)
+            for proxy_url in self._parse_api_results(data.get("results", [])):
+                if proxy_url not in known:
+                    self.active_pool.append(proxy_url)
+                    self.failure_count[proxy_url] = 0
+                    added += 1
+        if added:
+            logger.info("Webshare refresh: +%d new proxies (pool now %d active)", added, len(self.active_pool))
 
     @staticmethod
     def _normalize_proxy(raw: str) -> str:
@@ -79,10 +141,14 @@ class ProxyManager:
         
         while True:
             await asyncio.sleep(300)  # Every 5 minutes
-            
+
+            if self._api_key and time.time() - self._last_api_refresh > self._API_REFRESH_SECS:
+                await self._refresh_from_api(aiohttp)
+                self._last_api_refresh = time.time()
+
             with self._lock:
                 dead_proxies = list(self.dead_pool.keys())
-                
+
             if not dead_proxies:
                 continue
                 
