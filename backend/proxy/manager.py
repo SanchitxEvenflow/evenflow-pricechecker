@@ -25,15 +25,22 @@ class ProxyManager:
         self.dead_pool: dict[str, float] = {}  # proxy → timestamp when it died
         self.failure_count: dict[str, int] = {}
         self.index: int = 0
+        self._last_used: dict[str, float] = {}  # proxy → last time handed out (cooldown)
+        # Don't reuse the same IP for Amazon within this window — spreads load so no
+        # single IP gets hammered and fingerprinted in a burst. 0 disables.
+        self._cooldown_secs: float = float(os.getenv("PROXY_COOLDOWN_SECS", "8"))
         self._last_revive_check: float = time.time()  # Throttle revival checks
         self._revive_check_interval: float = 30.0  # Check every 30 seconds
         self._api_key: str | None = os.getenv("WBBSHARE_API")
         self._last_api_refresh: float = time.time()
+        # Rotating gateway (one endpoint, fresh Webshare-side IP per connection) beats
+        # the 100 fixed direct IPs for Amazon: fixed IPs get burned and evicted one by
+        # one until coverage collapses (not_found rate climbed 5%->46% over a week).
+        # Default to the gateway from proxies.txt; set PROXY_USE_ROTATING=false to use
+        # the discrete-IP API pool instead.
+        self._use_rotating: bool = os.getenv("PROXY_USE_ROTATING", "true").lower() == "true"
 
-        # Prefer Webshare API (100 discrete direct IPs, always current) over the
-        # static file — the file only holds the rotating gateway, which funnels
-        # everything through one backbone and turns per-proxy tracking inert.
-        if self._api_key:
+        if self._api_key and not self._use_rotating:
             self._load_from_api()
         if not self.active_pool:
             self._load_proxies(proxy_file)
@@ -142,7 +149,7 @@ class ProxyManager:
         while True:
             await asyncio.sleep(300)  # Every 5 minutes
 
-            if self._api_key and time.time() - self._last_api_refresh > self._API_REFRESH_SECS:
+            if self._api_key and not self._use_rotating and time.time() - self._last_api_refresh > self._API_REFRESH_SECS:
                 await self._refresh_from_api(aiohttp)
                 self._last_api_refresh = time.time()
 

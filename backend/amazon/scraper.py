@@ -520,23 +520,21 @@ async def scrape_amazon(
 
             status = _detect_status(soup, body_text, asin, page_url=page.url)
 
-            if status == "blocked":
+            # not_found is usually a burned/blocked IP serving a stub page, not a real
+            # missing product — treat it like blocked: fail the proxy and retry on a
+            # fresh draw before trusting it. (Was report_success, which reset the
+            # failure count and kept burned fixed IPs in rotation forever.)
+            if status in ("blocked", "not_found"):
                 proxy_manager.report_failure(proxy)
                 if attempt < max_proxy_attempts:
-                    logger.warning("Blocked on attempt %d for ASIN %s — retrying with new proxy", attempt + 1, asin)
+                    logger.warning("%s on attempt %d for ASIN %s — retrying with new proxy", status, attempt + 1, asin)
                     await _safe_close_context(context)
                     context = None
                     await asyncio.sleep(5)
                     continue
-                return {**_empty, "status": "blocked", "checked_at": datetime.now(IST).isoformat()}
+                return {**_empty, "status": status, "checked_at": datetime.now(IST).isoformat()}
 
-            if status == "not_found" and interstitial_seen and attempt < max_proxy_attempts:
-                # Title missing right after a bot-check click-through — the page likely
-                # never finished loading the real product. Retry, don't trust not_found.
-                logger.warning("not_found after interstitial for ASIN %s — retrying with new proxy", asin)
-                continue
-
-            if status in ("unavailable", "suppressed", "not_found"):
+            if status in ("unavailable", "suppressed"):
                 proxy_manager.report_success(proxy)
                 return {**_empty, "status": status, "checked_at": datetime.now(IST).isoformat()}
 
