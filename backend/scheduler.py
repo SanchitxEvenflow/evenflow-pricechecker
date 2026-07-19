@@ -774,10 +774,18 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str, write_
             "error": None,
         })
 
-        # Import here to avoid circular imports / keep module load light.
-        from instamart.scraper import fetch_instamart_data
+        # Swiggy Instamart is now a WAF-gated, client-rendered SPA (no SSR price).
+        # We scrape it with a real browser, city-major: one reused context per city
+        # (location set via GPS spoof), sweeping all PIDs, then closed. See
+        # instamart/browser_scraper.py for why curl/SSR parsing no longer works.
+        from instamart.browser_scraper import sweep_city
 
-        proxy_manager = app.state.proxy_manager
+        browser_manager = getattr(app.state, "browser_manager", None)
+        if browser_manager is None or not getattr(browser_manager, "browsers", None):
+            logger.error("Instamart: no Playwright browser pool — cannot scrape")
+            app.state.instamart_cron_status["error"] = "browser pool unavailable"
+            run_logger.fail_log(run_id, "browser pool unavailable")
+            return
 
         total_done = 0
         total_success = 0
@@ -786,126 +794,73 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str, write_
         historical_rows: list[list] = []
         BATCH_SIZE = 100  # Google Sheets API batch limit
 
-        loop = asyncio.get_running_loop()
-
-        async def scrape_one_city(pid_: str, loc: dict, target_variant_name: str | None = None) -> tuple[str, dict]:
-            async with batch_context(app.state):
-                try:
-                    result = await loop.run_in_executor(
-                        app.state.thread_pool,
-                        partial(
-                            fetch_instamart_data,
-                            item_id=pid_,
-                            lat=loc["lat"],
-                            lon=loc["lng"],
-                            city=loc["name"],
-                            store_id=loc.get("store_id", ""),
-                            proxy_manager=proxy_manager,
-                            target_variant_name=target_variant_name,
-                        ),
-                    )
-                except Exception:
-                    result = {"city": loc["name"], "status": "error"}
-            return (pid_, result)
-
-        async def scrape_pid(pid: str) -> tuple[str, dict]:
-            """Scrape all cities for one PID, returning aggregated city results."""
-            city_results: dict[str, dict] = {}
-            if not INSTAMART_LOCATIONS:
-                return (pid, city_results)
-                
-            first_loc = INSTAMART_LOCATIONS[0]
-            _, result1 = await scrape_one_city(pid, first_loc)
-            city_results[first_loc["name"]] = result1
-            
-            target_variant_name = result1.get("title")
-            
-            city_tasks = [asyncio.create_task(scrape_one_city(pid, loc, target_variant_name)) for loc in INSTAMART_LOCATIONS[1:]]
-            try:
-                for coro in asyncio.as_completed(city_tasks):
-                    try:
-                        _, result = await coro
-                    except Exception:
-                        logger.exception("Instamart: city task error for pid=%s", pid)
-                        continue
-                    city = result.get("city", "")
-                    if city:
-                        city_results[city] = result
-                    else:
-                        logger.warning("Instamart: result missing city field for pid=%s", pid)
-            finally:
-                for t in city_tasks:
-                    if not t.done():
-                        t.cancel()
-                await asyncio.gather(*city_tasks, return_exceptions=True)
-            return (pid, city_results)
-
         pid_index: dict[str, int] = {pid: i for i, pid in enumerate(pids)}
+        n_cities = max(1, len(INSTAMART_LOCATIONS))
+        # matrix[pid][city] accumulates results; rows are written pid-major at the end.
+        matrix: dict[str, dict[str, dict]] = {pid: {} for pid in pids}
 
-        # Bounded PID workers: each PID spawns 8 city sub-tasks (each acquires batch_context).
-        # Max in-flight tasks = n_pid_workers × 8, not len(pids) × 8.
-        n_pid_workers = min(len(pids), max(1, SCRAPE_CONCURRENCY - MANUAL_RESERVED))
-        work_queue: asyncio.Queue = asyncio.Queue()
-        for pid in pids:
-            work_queue.put_nowait(pid)
-        results_queue: asyncio.Queue = asyncio.Queue()
+        # Bound concurrent city contexts to keep RAM sane on small VPS (each context
+        # is a heavy Chromium SPA render). Default 3; tune via env.
+        city_conc = max(1, min(n_cities, int(os.getenv("INSTAMART_CITY_CONCURRENCY", "3"))))
+        city_sem = asyncio.Semaphore(city_conc)
+        cells_total = len(pids) * n_cities
+        progress = {"cells": 0}
+        proxy_pool = getattr(app.state, "instamart_proxy_pool", None)
 
-        async def _pid_worker():
-            while True:
+        def _on_cell(pid: str, r: dict) -> None:
+            progress["cells"] += 1
+            # Map cell progress onto the PID scale the UI expects.
+            app.state.instamart_cron_status["progress"] = progress["cells"] // n_cities
+
+        async def _sweep(loc: dict) -> None:
+            browser = browser_manager.get_browser()
+            if not browser:
+                logger.error("Instamart: no browser available for city %s", loc["name"])
+                return
+            async with city_sem:
                 try:
-                    pid = work_queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    break
-                try:
-                    result = await scrape_pid(pid)
+                    city_results = await sweep_city(browser, loc, pids, on_result=_on_cell,
+                                                    proxy_pool=proxy_pool)
                 except Exception:
-                    logger.exception("Instamart: pid worker error for pid=%s", pid)
-                    result = (pid, {})
-                await results_queue.put(result)
+                    logger.exception("Instamart: city sweep failed for %s", loc["name"])
+                    city_results = {}
+            for pid, r in city_results.items():
+                matrix.setdefault(pid, {})[loc["name"]] = r
 
-        pid_worker_tasks: list[asyncio.Task] = []
+        logger.info("Instamart: sweeping %d cities × %d PIDs (%d contexts at a time)",
+                    n_cities, len(pids), city_conc)
+        await asyncio.gather(*[asyncio.create_task(_sweep(loc)) for loc in INSTAMART_LOCATIONS])
 
-        try:
-            pid_worker_tasks = [asyncio.create_task(_pid_worker()) for _ in range(n_pid_workers)]
+        # Build rows pid-major from the matrix and flush in batches.
+        for pid in pids:
+            city_results = matrix.get(pid, {})
+            for r in city_results.values():
+                if r.get("status", "error") == "error":
+                    total_failed += 1
+                else:
+                    total_success += 1
 
-            for _ in range(len(pids)):
-                pid, city_results = await results_queue.get()
+            i = pid_index[pid]
+            total_done += 1
+            app.state.instamart_cron_status["progress"] = total_done
+            run_logger.update_progress(run_id, total_success, total_failed)
 
-                for r in city_results.values():
-                    if r.get("status", "error") == "error":
-                        total_failed += 1
-                    else:
-                        total_success += 1
+            row_values = format_instamart_row(city_results)
+            batch_updates.append({"row": i + 2, "values": row_values})
+            historical_rows.append([pid] + row_values + [new_tab])
 
-                i = pid_index[pid]
-                total_done += 1
-                app.state.instamart_cron_status["progress"] = total_done
-                run_logger.update_progress(run_id, total_success, total_failed)
-
-                row_values = format_instamart_row(city_results)
-                batch_updates.append({
-                    "row": i + 2,
-                    "values": row_values,
-                })
-                historical_rows.append([pid] + row_values + [new_tab])
-
-                should_flush = (len(batch_updates) == BATCH_SIZE) or (total_done == len(pids))
-                if should_flush:
-                    try:
-                        await sheets_client.async_batch_update_instamart_rows(sheet_id, new_tab, batch_updates)
-                        logger.info(
-                            "Instamart: wrote batch of %d rows (%d/%d total)",
-                            len(batch_updates), total_done, len(pids),
-                        )
-                        batch_updates = []
-                    except Exception:
-                        logger.exception("Instamart: failed to write batch")
-                        batch_updates = []
-        finally:
-            for t in pid_worker_tasks:
-                if not t.done():
-                    t.cancel()
-            await asyncio.gather(*pid_worker_tasks, return_exceptions=True)
+            should_flush = (len(batch_updates) == BATCH_SIZE) or (total_done == len(pids))
+            if should_flush:
+                try:
+                    await sheets_client.async_batch_update_instamart_rows(sheet_id, new_tab, batch_updates)
+                    logger.info(
+                        "Instamart: wrote batch of %d rows (%d/%d total)",
+                        len(batch_updates), total_done, len(pids),
+                    )
+                    batch_updates = []
+                except Exception:
+                    logger.exception("Instamart: failed to write batch")
+                    batch_updates = []
             try:
                 if batch_updates:
                     try:

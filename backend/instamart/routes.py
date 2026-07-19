@@ -4,13 +4,12 @@ import asyncio
 import json
 import logging
 import os
-from functools import partial
 
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse
 
 from instamart.locations import LOCATIONS, LOCATIONS_BY_CITY, CITY_NAMES
-from instamart.scraper import fetch_instamart_data
+from instamart.browser_scraper import scrape_one
 from schemas.price import InstamartRequest, InstamartAllCitiesRequest, InstamartResponse
 from utils.google_sheets import GoogleSheetsClient
 from utils.scrape_helpers import batch_context, sem_with_timeout
@@ -32,28 +31,19 @@ async def check_instamart_price(body: InstamartRequest, request: Request):
             detail=f"Invalid city '{body.city}'. Valid cities: {CITY_NAMES}",
         )
 
-    proxy_manager = request.app.state.proxy_manager
-
     cache = getattr(request.app.state, "cache", None)
     cache_key = f"instamart_{body.product_id}_{body.city}"
-    
+
     if cache is not None and cache_key in cache:
         result = cache[cache_key]
     else:
-        loop = asyncio.get_running_loop()
+        browser = request.app.state.browser_manager.get_browser() if getattr(request.app.state, "browser_manager", None) else None
+        if not browser:
+            raise HTTPException(status_code=503, detail="Browser pool unavailable")
+        _pool = getattr(request.app.state, "instamart_proxy_pool", None)
+        _proxy = _pool.pick() if _pool else None
         async with sem_with_timeout(request.app.state.total_sem):
-            result = await loop.run_in_executor(
-                request.app.state.thread_pool,
-                partial(
-                    fetch_instamart_data,
-                    item_id=body.product_id,
-                    lat=city_data["lat"],
-                    lon=city_data["lng"],
-                    city=body.city,
-                    store_id=city_data["store_id"],
-                    proxy_manager=proxy_manager,
-                ),
-            )
+            result = await scrape_one(browser, city_data, body.product_id, proxy=_proxy)
         if cache is not None and result.get("status") not in ("error", "invalid_format"):
             cache[cache_key] = result
 
@@ -68,7 +58,6 @@ async def check_instamart_all_cities(body: InstamartAllCitiesRequest, request: R
     Scrape instamart for one or more product IDs across all cities.
     Results are streamed as SSE events as they complete.
     """
-    proxy_manager = request.app.state.proxy_manager
     app_state = request.app.state
 
     # Build work items: (product_id, city_data)
@@ -94,26 +83,23 @@ async def check_instamart_all_cities(body: InstamartAllCitiesRequest, request: R
         if cache is not None and cache_key in cache:
             return cache[cache_key].copy()
 
+        browser = app_state.browser_manager.get_browser() if getattr(app_state, "browser_manager", None) else None
+        if not browser:
+            return {"product_id": product_id, "city": display_city, "status": "error",
+                    "error_message": "browser pool unavailable", "price": None, "mrp": None,
+                    "title": None, "is_sold_out": False, "url": None, "checked_at": None}
+
+        # Report under display_city (disambiguates duplicate city names).
+        loc_display = {**loc, "name": display_city}
+        _pool = getattr(app_state, "instamart_proxy_pool", None)
+        _proxy = _pool.pick() if _pool else None
         async with batch_context(app_state):
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(
-                app_state.thread_pool,
-                partial(
-                    fetch_instamart_data,
-                    item_id=product_id,
-                    lat=loc["lat"],
-                    lon=loc["lng"],
-                    city=display_city,
-                    store_id=loc["store_id"],
-                    proxy_manager=proxy_manager,
-                    target_variant_name=target_variant_name,
-                ),
-            )
-            
-            if cache is not None and result.get("status") not in ("error", "invalid_format"):
-                cache[cache_key] = result.copy()
-                
-            return result
+            result = await scrape_one(browser, loc_display, product_id, target_variant_name, proxy=_proxy)
+
+        if cache is not None and result.get("status") not in ("error", "invalid_format"):
+            cache[cache_key] = result.copy()
+
+        return result
 
     async def event_stream():
         done = 0

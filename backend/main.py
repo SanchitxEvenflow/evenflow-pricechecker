@@ -206,6 +206,9 @@ async def lifespan(app: FastAPI):
         "progress": None,
         "error": None,
     }
+    # Instamart-only sticky proxy pool (Webshare API). None-safe: runs direct if unset.
+    from instamart.proxy_provider import ProxyPool
+    app.state.instamart_proxy_pool = ProxyPool()
     app.state.flipkart_minutes_cron_status = {
         "is_running": False,
         "last_run_at": None,
