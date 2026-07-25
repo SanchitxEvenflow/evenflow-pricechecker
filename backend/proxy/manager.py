@@ -2,11 +2,14 @@
 
 import logging
 import os
+import re
 import threading
 import time
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+from utils.headers import UA_POOL
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -33,6 +36,9 @@ class ProxyManager:
         self._revive_check_interval: float = 30.0  # Check every 30 seconds
         self._api_key: str | None = os.getenv("WBBSHARE_API")
         self._last_api_refresh: float = time.time()
+        # Cookie jar per proxy — reused across scrapes so a proxy carries a warmed
+        # session forward instead of every context starting from a blank slate.
+        self._proxy_cookies: dict[str, list[dict]] = {}
         # Rotating gateway (one endpoint, fresh Webshare-side IP per connection) beats
         # the 100 fixed direct IPs for Amazon: fixed IPs get burned and evicted one by
         # one until coverage collapses (not_found rate climbed 5%->46% over a week).
@@ -162,11 +168,25 @@ class ProxyManager:
             logger.info("ProxyManager: Testing %d dead proxies for resurrection...", len(dead_proxies))
             
             async def test_proxy(proxy_url):
+                # ponytail: hit amazon.in itself, not httpbin — a proxy can be alive
+                # and unflagged everywhere else while Amazon specifically blocks it.
+                # Still a plain aiohttp GET (no browser fingerprint), so it only catches
+                # network/IP-level blocks, not the headless-fingerprint interstitial
+                # bounce — upgrade to a real Playwright check if false-revivals persist.
                 try:
                     async with aiohttp.ClientSession() as session:
-                        async with session.get("http://httpbin.org/ip", proxy=proxy_url, timeout=10) as resp:
-                            if resp.status == 200:
-                                return proxy_url, True
+                        async with session.get(
+                            "https://www.amazon.in/",
+                            proxy=proxy_url,
+                            timeout=10,
+                            headers={"User-Agent": UA_POOL[0], "Accept-Language": "en-IN,en;q=0.9"},
+                        ) as resp:
+                            if resp.status != 200:
+                                return proxy_url, False
+                            body = (await resp.text())[:2000].lower()
+                            if "captcha" in body or "robot check" in body or "continue shopping" in body:
+                                return proxy_url, False
+                            return proxy_url, True
                 except Exception:
                     pass
                 return proxy_url, False
@@ -187,15 +207,41 @@ class ProxyManager:
                 logger.info("ProxyManager: Successfully resurrected %d proxies!", len(revived))
 
     def get_proxy(self) -> str | None:
-        """Return next proxy via round-robin, or None if pool is empty."""
+        """Return next proxy via round-robin, skipping ones handed out within the cooldown window."""
         with self._lock:
             if not self.active_pool:
                 logger.warning("Proxy pool is empty — caller should make direct request")
                 return None
 
-            proxy = self.active_pool[self.index % len(self.active_pool)]
+            now = time.time()
+            pool_size = len(self.active_pool)
+            for _ in range(pool_size):
+                proxy = self.active_pool[self.index % pool_size]
+                self.index += 1
+                if now - self._last_used.get(proxy, 0) >= self._cooldown_secs:
+                    self._last_used[proxy] = now
+                    return proxy
+
+            # Whole pool is within cooldown (small pool, high demand) — hand one out
+            # anyway rather than starving the caller.
+            proxy = self.active_pool[self.index % pool_size]
             self.index += 1
+            self._last_used[proxy] = now
             return proxy
+
+    def get_cookies(self, proxy: str | None) -> list[dict]:
+        """Return the warmed cookie jar for a proxy, or [] if none saved yet."""
+        if proxy is None:
+            return []
+        with self._lock:
+            return list(self._proxy_cookies.get(proxy, []))
+
+    def save_cookies(self, proxy: str | None, cookies: list[dict]) -> None:
+        """Persist a proxy's cookie jar so the next scrape on this proxy reuses it."""
+        if proxy is None or not cookies:
+            return
+        with self._lock:
+            self._proxy_cookies[proxy] = cookies
 
     def report_failure(self, proxy: str) -> None:
         """Increment failure count; move to dead pool after 10 failures (unless it's the last proxy)."""
@@ -228,4 +274,39 @@ class ProxyManager:
                 "active": len(self.active_pool),
                 "dead": len(self.dead_pool),
                 "total": len(self.active_pool) + len(self.dead_pool),
+            }
+
+    @staticmethod
+    def _mask(proxy: str) -> str:
+        """Strip user:pass so the detail endpoint doesn't leak credentials."""
+        return re.sub(r"//[^@]+@", "//***@", proxy)
+
+    def detail(self) -> dict:
+        """Per-proxy breakdown — failure count, cooldown state, dead-since — for the health endpoint."""
+        with self._lock:
+            now = time.time()
+            active = [
+                {
+                    "proxy": self._mask(p),
+                    "status": "active",
+                    "failure_count": self.failure_count.get(p, 0),
+                    "seconds_since_last_used": round(now - self._last_used[p], 1) if p in self._last_used else None,
+                    "has_warmed_cookies": p in self._proxy_cookies,
+                }
+                for p in self.active_pool
+            ]
+            dead = [
+                {
+                    "proxy": self._mask(p),
+                    "status": "dead",
+                    "failure_count": self.failure_count.get(p, 0),
+                    "dead_for_seconds": round(now - died_at, 1),
+                }
+                for p, died_at in self.dead_pool.items()
+            ]
+            return {
+                "summary": {"active": len(active), "dead": len(dead), "total": len(active) + len(dead)},
+                "cooldown_secs": self._cooldown_secs,
+                "active_proxies": active,
+                "dead_proxies": dead,
             }

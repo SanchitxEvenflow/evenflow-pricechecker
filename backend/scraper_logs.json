@@ -1,0 +1,35 @@
+[
+  {
+    "run_id": "64585a4f",
+    "type": "manual",
+    "triggered_at": "2026-07-25T19:18:46.003237+05:30",
+    "completed_at": null,
+    "total_asins": 722,
+    "success_count": 0,
+    "failed_count": 0,
+    "sheet_tab": null,
+    "status": "in_progress"
+  },
+  {
+    "run_id": "3f70c527",
+    "type": "manual",
+    "triggered_at": "2026-07-25T19:10:39.050960+05:30",
+    "completed_at": "2026-07-25T19:12:27.805878+05:30",
+    "total_asins": 722,
+    "success_count": 27,
+    "failed_count": 1,
+    "sheet_tab": "Manual_Trigger_2026-07-25_19-10",
+    "status": "completed"
+  },
+  {
+    "run_id": "1bb68238",
+    "type": "manual",
+    "triggered_at": "2026-07-25T14:31:56.992790+05:30",
+    "completed_at": "2026-07-25T15:21:40.339945+05:30",
+    "total_asins": 722,
+    "success_count": 717,
+    "failed_count": 5,
+    "sheet_tab": "Manual_Trigger_2026-07-25_14-31",
+    "status": "completed"
+  }
+]

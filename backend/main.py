@@ -34,6 +34,7 @@ from proxy.manager import ProxyManager
 from amazon.routes import price_router as amazon_price_router
 from amazon.routes import sheets_router as amazon_sheets_router
 from amazon.routes import manual_router as amazon_manual_router
+from amazon import scraper as amazon_scraper
 from flipkart.routes import router as flipkart_price_router
 from flipkart.routes import manual_router as flipkart_manual_router
 from flipkart.routes import sheets_router as flipkart_sheets_router
@@ -430,6 +431,16 @@ async def get_all_cron_status(request: Request):
         "instamart": dict(getattr(request.app.state, "instamart_cron_status", {})),
         "flipkart_minutes": dict(getattr(request.app.state, "flipkart_minutes_cron_status", {})),
     }
+
+@app.get("/proxy-status")
+async def proxy_status(request: Request):
+    """Return per-proxy breakdown — failure count, cooldown state, dead-since."""
+    return request.app.state.proxy_manager.detail()
+
+@app.get("/amazon/source-stats")
+async def amazon_source_stats():
+    """Per-source (snowpad/webshare/direct) success/fail counts for Amazon scrapes."""
+    return amazon_scraper.get_source_stats()
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
