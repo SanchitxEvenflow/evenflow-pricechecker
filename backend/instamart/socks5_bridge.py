@@ -21,12 +21,28 @@ selecting 0x02. Confirmed via raw-socket testing against the gateway.
 
 import asyncio
 import logging
+import os
 import struct
 
 logger = logging.getLogger(__name__)
 
+# Bounds the upstream SOCKS5 handshake (TCP connect + greeting + auth + CONNECT reply).
+# Without this, a hung gateway (connects but never responds) would hold the connection —
+# and the caller's Snowpad concurrency slot — open indefinitely.
+HANDSHAKE_TIMEOUT = float(os.getenv("SOCKS5_HANDSHAKE_TIMEOUT", "10"))
+
 
 async def _socks5_connect(
+    upstream_host: str, upstream_port: int, user: str, password: str,
+    target_host: str, target_port: int,
+):
+    return await asyncio.wait_for(
+        _socks5_connect_inner(upstream_host, upstream_port, user, password, target_host, target_port),
+        timeout=HANDSHAKE_TIMEOUT,
+    )
+
+
+async def _socks5_connect_inner(
     upstream_host: str, upstream_port: int, user: str, password: str,
     target_host: str, target_port: int,
 ):
