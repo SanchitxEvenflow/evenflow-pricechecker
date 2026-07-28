@@ -12,7 +12,7 @@ from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from amazon.scraper import scrape_amazon, fetch_curl_supplement, merge_curl_supplement
+from amazon.scraper import scrape_amazon_with_retry, fetch_curl_supplement, merge_curl_supplement
 from schemas.price import AmazonRequest, AmazonResponse
 from utils.google_sheets import GoogleSheetsClient
 from utils.scrape_helpers import CHUNK_SIZE, SCRAPE_CONCURRENCY, batch_context, format_update, get_browser, sem_with_timeout
@@ -37,7 +37,7 @@ async def check_amazon_price(body: AmazonRequest, request: Request):
     else:
         proxy_manager = request.app.state.proxy_manager
         async with sem_with_timeout(request.app.state.total_sem):
-            result = await scrape_amazon(body.asin, get_browser(request.app.state), proxy_manager, skip_curl=True, browser_manager=request.app.state.browser_manager)
+            result = await scrape_amazon_with_retry(body.asin, get_browser(request.app.state), proxy_manager, skip_curl=True, browser_manager=request.app.state.browser_manager)
         cookies = result.pop("_cookies", {}) or {}
         if cookies:
             curl_data = await fetch_curl_supplement(body.asin, cookies)
@@ -104,7 +104,7 @@ _format_update = format_update
 
 async def _scrape_with_sem(asin: str, row: int, app_state, proxy_manager) -> dict:
     async with batch_context(app_state):
-        result = await scrape_amazon(asin, get_browser(app_state), proxy_manager, skip_curl=True, browser_manager=app_state.browser_manager)
+        result = await scrape_amazon_with_retry(asin, get_browser(app_state), proxy_manager, skip_curl=True, browser_manager=app_state.browser_manager)
         result["row"] = row
     cookies = result.pop("_cookies", {}) or {}
     if cookies:
@@ -295,7 +295,7 @@ async def scrape_batch_stream(
 
     async def worker(row_data: dict) -> None:
         async with batch_context(app_state):
-            result = await scrape_amazon(row_data["asin"], get_browser(app_state), proxy_manager, skip_curl=True, browser_manager=app_state.browser_manager)
+            result = await scrape_amazon_with_retry(row_data["asin"], get_browser(app_state), proxy_manager, skip_curl=True, browser_manager=app_state.browser_manager)
             result["row"] = row_data["row"]
         try:
             cookies = result.pop("_cookies", {}) or {}
@@ -412,7 +412,7 @@ async def scrape_manual(body: ManualScrapeRequest, request: Request):
         # (no timeout): MANUAL_RESERVED guarantees batch runs can never hold every
         # slot, so a manual worker always gets one within one scrape-cycle.
         async with app_state.total_sem:
-            result = await scrape_amazon(
+            result = await scrape_amazon_with_retry(
                 asin, get_browser(app_state), proxy_manager,
                 skip_curl=True, browser_manager=app_state.browser_manager,
             )

@@ -51,7 +51,7 @@ from schemas.price import (
     HealthResponse,
 )
 
-from amazon.scraper import scrape_amazon, fetch_curl_supplement, merge_curl_supplement
+from amazon.scraper import scrape_amazon_with_retry, fetch_curl_supplement, merge_curl_supplement
 from flipkart.scraper import scrape_flipkart
 from utils.google_sheets import GoogleSheetsClient
 from utils.scrape_helpers import SCRAPE_CONCURRENCY, MANUAL_RESERVED, BROWSER_POOL_SIZE, get_browser, sem_with_timeout
@@ -464,7 +464,7 @@ async def check_both_prices(body: BothRequest, request: Request):
     # Run each scraper sequentially under its own semaphore slot to avoid holding
     # two browser slots simultaneously, which would halve effective concurrency.
     async with sem_with_timeout(request.app.state.total_sem):
-        amazon_result = await scrape_amazon(body.asin, get_browser(request.app.state), proxy_manager, skip_curl=True, browser_manager=request.app.state.browser_manager)
+        amazon_result = await scrape_amazon_with_retry(body.asin, get_browser(request.app.state), proxy_manager, skip_curl=True, browser_manager=request.app.state.browser_manager)
     amazon_cookies = amazon_result.pop("_cookies", {}) or {}
     if amazon_cookies:
         curl_data = await fetch_curl_supplement(body.asin, amazon_cookies)

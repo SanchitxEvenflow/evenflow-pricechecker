@@ -704,3 +704,28 @@ async def scrape_amazon(
             context = None
 
     return {**_empty, "status": "error", "message": "Max retries exceeded", "checked_at": datetime.now(IST).isoformat()}
+
+
+# Full proxy ladder (snowpad + webshare + direct) already ran inside scrape_amazon
+# before it gives up with "blocked" — this restarts that whole ladder fresh,
+# since a burned IP tier on attempt 1 doesn't mean the next fresh draw is burned too.
+AMAZON_BLOCKED_RETRIES = int(os.getenv("AMAZON_BLOCKED_RETRIES", "1"))
+
+
+async def scrape_amazon_with_retry(
+    asin: str,
+    browser: Browser,
+    proxy_manager: ProxyManager,
+    skip_curl: bool = False,
+    browser_manager=None,
+) -> dict:
+    """scrape_amazon, retrying the whole ASIN if every proxy tier came back blocked."""
+    result = await scrape_amazon(asin, browser, proxy_manager, skip_curl=skip_curl, browser_manager=browser_manager)
+    attempt = 0
+    while result.get("status") == "blocked" and attempt < AMAZON_BLOCKED_RETRIES:
+        attempt += 1
+        logger.warning("ASIN %s blocked on full proxy ladder — retrying whole scrape (%d/%d)",
+                        asin, attempt, AMAZON_BLOCKED_RETRIES)
+        await asyncio.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
+        result = await scrape_amazon(asin, browser, proxy_manager, skip_curl=skip_curl, browser_manager=browser_manager)
+    return result

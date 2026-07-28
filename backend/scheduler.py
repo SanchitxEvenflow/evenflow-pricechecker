@@ -23,7 +23,7 @@ from utils.scrape_helpers import (
     get_browser,
 )
 
-from amazon.scraper import scrape_amazon, fetch_curl_supplement, merge_curl_supplement
+from amazon.scraper import scrape_amazon_with_retry, fetch_curl_supplement, merge_curl_supplement
 from flipkart.scraper import scrape_flipkart
 from blinkit.scraper import fetch_blinkit_data
 from blinkit.locations import LOCATIONS as BLINKIT_LOCATIONS
@@ -112,7 +112,7 @@ async def _run_full_scrape(app, tab_prefix: str, run_type: str, write_historical
 
         async def scrape_one(row_data: dict) -> dict:
             async with batch_context(app.state):
-                result = await scrape_amazon(row_data["asin"], get_browser(app.state), proxy_manager, skip_curl=True, browser_manager=app.state.browser_manager)
+                result = await scrape_amazon_with_retry(row_data["asin"], get_browser(app.state), proxy_manager, skip_curl=True, browser_manager=app.state.browser_manager)
                 result["row"] = row_data["row"]
             # semaphore released — curl runs here, overlapping with the next ASIN's Playwright scrape
             cookies = result.pop("_cookies", {}) or {}
