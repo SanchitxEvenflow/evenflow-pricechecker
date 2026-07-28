@@ -17,7 +17,7 @@ from playwright.async_api import Browser
 from playwright._impl._errors import TargetClosedError
 
 from proxy.manager import ProxyManager
-from instamart.socks5_provider import get_provider as get_snowpad_provider
+from proxy.socks5_provider import get_provider as get_snowpad_provider
 from utils.headers import UA_POOL
 
 load_dotenv()

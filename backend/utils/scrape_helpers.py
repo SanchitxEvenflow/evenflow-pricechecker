@@ -198,7 +198,8 @@ FLIPKART_MINUTES_CITIES = [
 def format_flipkart_minutes_row(results_by_city: dict) -> list:
     """Flatten per-city Flipkart Minutes results into a single sheet row.
 
-    Returns a list of 24 values: [price, mrp, status] × 8 cities in FLIPKART_MINUTES_CITIES order.
+    Returns a list of values: [price, mrp, status] × N cities (in FLIPKART_MINUTES_CITIES order)
+    followed by a checked_at timestamp.
     """
     values: list[str] = []
     for city in FLIPKART_MINUTES_CITIES:
@@ -211,6 +212,8 @@ def format_flipkart_minutes_row(results_by_city: dict) -> list:
             f"{mrp:.2f}" if mrp is not None else "",
             status,
         ])
+    timestamps = [r.get("checked_at") for r in results_by_city.values() if r.get("checked_at")]
+    values.append(max(timestamps) if timestamps else "")
     return values
 
 

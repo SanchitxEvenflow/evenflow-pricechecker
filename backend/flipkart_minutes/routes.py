@@ -60,7 +60,6 @@ async def check_flipkart_minutes_all_cities(body: FlipkartMinutesAllCitiesReques
     Results are streamed as SSE events as they complete.
     """
     app_state = request.app.state
-    queue: asyncio.Queue = asyncio.Queue()
 
     work_items = [
         (pid.strip(), loc)

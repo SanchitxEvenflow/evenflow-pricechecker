@@ -351,7 +351,7 @@ def fetch_blinkit_data(
 
         except ValueError as e:
             logger.error("JSON/extraction error on attempt %d for item_id=%s: %s", attempt + 1, item_id, e)
-            if "response" in dir():
+            if "response" in locals():
                 text = response.text.lower()
                 if "cloudflare" in text or "<html" in text:
                     logger.error("Cloudflare challenge detected — rotate DEVICE_ID or proxies")

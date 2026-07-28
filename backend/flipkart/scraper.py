@@ -14,6 +14,7 @@ import logging
 import os
 import random
 import re
+import threading
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
@@ -71,6 +72,7 @@ async def _block_resources(route) -> None:
 # ── In-memory URL cache with size limit ─────────────────────────────────────
 _resolved_url_cache: dict[str, str] = {}
 _CACHE_MAX_SIZE = 10000  # Prevents unbounded memory growth (~50MB at max)
+_cache_lock = threading.Lock()
 
 
 def _build_fsn_url(fsn: str) -> str:
@@ -86,15 +88,16 @@ def _cache_url(fsn: str, resolved_url: str) -> None:
     """Cache resolved URL for FSN with size limit to prevent memory leaks."""
     global _resolved_url_cache
 
-    # Evict 10% of oldest entries if cache exceeds max size
-    if len(_resolved_url_cache) >= _CACHE_MAX_SIZE:
-        evict_count = _CACHE_MAX_SIZE // 10
-        old_keys = list(_resolved_url_cache.keys())[:evict_count]
-        for key in old_keys:
-            del _resolved_url_cache[key]
-        logger.debug("Cache evicted %d entries (cache size: %d)", evict_count, len(_resolved_url_cache))
+    with _cache_lock:
+        # Evict 10% of oldest entries if cache exceeds max size
+        if len(_resolved_url_cache) >= _CACHE_MAX_SIZE:
+            evict_count = _CACHE_MAX_SIZE // 10
+            old_keys = list(_resolved_url_cache.keys())[:evict_count]
+            for key in old_keys:
+                del _resolved_url_cache[key]
+            logger.debug("Cache evicted %d entries (cache size: %d)", evict_count, len(_resolved_url_cache))
 
-    _resolved_url_cache[fsn] = resolved_url
+        _resolved_url_cache[fsn] = resolved_url
     logger.debug("Cached resolved URL for FSN %s: %s", fsn, resolved_url)
 
 
@@ -367,7 +370,7 @@ async def scrape_flipkart(fsn: str, browser: Browser, proxy_manager: ProxyManage
 
     # ── Fast path: Rome API ──────────────────────────────────────────────────
     try:
-        rome_data = await asyncio.get_event_loop().run_in_executor(
+        rome_data = await asyncio.get_running_loop().run_in_executor(
             None, _rome_fetch_fk, fsn
         )
         extracted = _extract_from_rome(rome_data)
@@ -634,8 +637,11 @@ def _error_result(fsn: str, url: str, status: str) -> dict:
     return {
         "fsn": fsn,
         "price": "",
+        "mrp": None,
         "rating": None,
         "rating_count": None,
+        "discount": None,
+        "fulfilled_by": None,
         "status": status,
         "platform": "flipkart",
         "url": url,

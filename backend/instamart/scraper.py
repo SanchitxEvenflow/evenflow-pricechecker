@@ -1,5 +1,22 @@
 """
 instamart/scraper.py
+
+██████████████████████████████████████████████████████████████████████████████
+DEPRECATED — This file is no longer used. Do NOT import from it.
+
+Swiggy moved Instamart behind AWS WAF and dropped SSR product data in 2026.
+Price no longer lives in window.___INITIAL_STATE___ — even a real browser
+sees empty productV2.itemData.  The curl_cffi + SSR parsing approach below
+is dead.
+
+All active scraping logic has moved to:
+    instamart/browser_scraper.py  (Playwright DOM scraper)
+
+This file is kept only as a historical reference.  It will be deleted in a
+future cleanup pass.
+██████████████████████████████████████████████████████████████████████████████
+
+Original description (no longer accurate):
 Swiggy Instamart price scraper — direct HTTP via curl_cffi, no Playwright.
 
 Fetches the SSR product page and extracts product data from the embedded

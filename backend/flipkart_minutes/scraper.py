@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import random
 from datetime import datetime, timezone, timedelta
 
 from curl_cffi import requests as cffi
@@ -175,13 +176,13 @@ async def fetch_flipkart_minutes_data(
 
     for attempt in range(4):
         try:
-            data = await asyncio.get_event_loop().run_in_executor(
+            data = await asyncio.get_running_loop().run_in_executor(
                 None, _rome_fetch, pid, cookie_str, True  # HYPERLOCAL
             )
         except Exception as e:
             last_error = str(e)
             logger.warning("[FKM] Rome request error pid=%s attempt=%d: %s", pid, attempt, e)
-            await asyncio.sleep(2)
+            await asyncio.sleep(random.uniform(1.0, 3.0) + attempt * 0.5)
             continue
 
         if _needs_cookie_refresh(data):

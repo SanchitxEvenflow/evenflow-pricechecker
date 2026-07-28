@@ -128,6 +128,7 @@ class BlinkitCityResult(BaseModel):
     is_sold_out: bool = False
     url: str
     checked_at: str
+    error_message: str | None = None
 
 
 class BlinkitResponse(BlinkitCityResult):

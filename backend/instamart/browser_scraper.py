@@ -209,14 +209,15 @@ async def scrape_item(page, item_id: str, city: str, target_variant_name: str | 
         )
 
     if sold_out and add_ct == 0:
-        return result(title=title, price=offer, mrp=mrp or offer, status="out_of_stock", is_sold_out=True)
+        return result(title=title, price=offer, mrp=mrp if mrp is not None else offer, status="out_of_stock", is_sold_out=True)
 
     price = offer if offer is not None else mrp
     if price is None:
-        return result(title=title, error_message="price_not_found")
+        # No price or mrp found — treat as out-of-stock rather than error
+        return result(title=title, status="out_of_stock", is_sold_out=True, error_message="price_not_found")
 
     logger.info("[Instamart] %s: OK %s price=%s mrp=%s", city, item_id, price, mrp)
-    return result(title=title, price=price, mrp=mrp or price, status="available", is_sold_out=False)
+    return result(title=title, price=price, mrp=mrp if mrp is not None else price, status="available", is_sold_out=False)
 
 
 async def scrape_one(browser, loc: dict, item_id: str, target_variant_name: str | None = None,
