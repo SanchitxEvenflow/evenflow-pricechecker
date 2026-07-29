@@ -266,7 +266,7 @@ async def _block_resources(route) -> None:
 
 def _detect_status(soup: BeautifulSoup, response_text: str, asin: str, page_url: str = "") -> str:
     lower_text = response_text.lower()
-    if "captcha" in lower_text or "robot check" in lower_text or "continue shopping" in lower_text:
+    if "captcha" in lower_text or "robot check" in lower_text or "continue shopping" in lower_text or "not a robot" in lower_text:
         logger.warning("BLOCKED: bot-challenge page for %s (response_len=%d)", asin, len(response_text))
         return "blocked"
 
@@ -345,6 +345,12 @@ async def _safe_close_context(context) -> None:
 async def _handle_interstitial(page) -> bool:
     """Click through Amazon's 'Continue shopping' bot-check interstitial if present."""
     try:
+        # Fast path: a real product page has #productTitle and is never an interstitial.
+        # One selector query beats dragging the full ~2.5MB body text across CDP, which
+        # cost ~1.7s on every load — on the happy path (~75%) that was pure waste.
+        if await page.query_selector("#productTitle"):
+            return False
+
         body = await page.inner_text("body")
         if "continue shopping" not in body.lower():
             return False
@@ -544,17 +550,18 @@ async def scrape_amazon(
             page = await context.new_page()
 
             logger.info("Navigating to %s via %s%s", url, source, f" proxy={proxy}" if proxy else "")
-            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            # "commit" returns once response headers land; we then gate on the element we
+            # actually need. Waiting for full domcontentloaded on Amazon's ~2.5MB product
+            # HTML over a mobile-carrier exit IP cost ~9s/attempt for no extra data.
+            await page.goto(url, wait_until="commit", timeout=30000)
 
             logger.info("Page landed at: %s", page.url)
-            interstitial_seen = await _handle_interstitial(page)
+            try:
+                await page.wait_for_selector("#productTitle", timeout=15000)
+            except Exception:
+                pass  # not a product page (blocked/interstitial/404) — classified below
 
-            # Only wait for title if we didn't already wait inside the interstitial handler
-            if not interstitial_seen:
-                try:
-                    await page.wait_for_selector("#productTitle", timeout=8000)
-                except Exception:
-                    pass  # _detect_status will return not_found if still missing
+            await _handle_interstitial(page)
 
             html = await page.content()
             soup = BeautifulSoup(html, "html.parser")
@@ -579,7 +586,9 @@ async def scrape_amazon(
                     logger.warning("%s on attempt %d (%s) for ASIN %s — retrying with new proxy", status, attempt + 1, source, asin)
                     await _safe_close_context(context)
                     context = None
-                    await asyncio.sleep(5)
+                    # No extra cooldown here — the next iteration already sleeps
+                    # DELAY_MIN..DELAY_MAX, and Snowpad hands out a fresh exit IP per
+                    # connection, so pausing longer doesn't un-burn anything.
                     continue
                 return {**_empty, "status": status, "checked_at": datetime.now(IST).isoformat()}
 
