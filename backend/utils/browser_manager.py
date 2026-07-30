@@ -76,9 +76,12 @@ class BrowserPoolManager:
 
         # ── Liveness check ──
         if not b.is_connected():
-            logger.warning(
-                "BrowserPool: Browser %d is dead (is_connected=False) — triggering recycle", idx
-            )
+            # Only log on the call that actually starts the recycle — a dead pool can be
+            # polled hundreds of times per second, and every one of those used to log.
+            if not self._recycling[idx]:
+                logger.warning(
+                    "BrowserPool: Browser %d is dead (is_connected=False) — triggering recycle", idx
+                )
             self._trigger_recycle(idx, b)
             raise RuntimeError(
                 f"Browser {idx} has crashed and is being recycled — retry shortly"
@@ -95,6 +98,42 @@ class BrowserPoolManager:
             self._trigger_recycle(idx, b)
 
         return b
+
+    async def acquire(self, timeout: float = 45.0, poll: float = 0.5):
+        """Return a live browser, waiting out an in-flight recycle.
+
+        get_browser() fails fast, which is right for a scrape already holding a
+        page. It is wrong for a caller that has just picked up a work item: a
+        recycle takes a few seconds, and failing fast burns every ASIN pulled off
+        the queue during that window. This polls all slots until one comes back.
+        """
+        if not self.browsers:
+            raise RuntimeError("Browser pool not initialized — Playwright failed to start")
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        waited = False
+
+        while True:
+            # One pass over every slot — with pool size 2, slot 0 can be dead while 1 is fine.
+            for _ in range(len(self.browsers)):
+                try:
+                    return self.get_browser()
+                except RuntimeError:
+                    continue
+
+            if loop.time() >= deadline:
+                raise RuntimeError(
+                    f"No live browser after {timeout:.0f}s — pool still recycling"
+                )
+
+            if not waited:
+                waited = True
+                logger.warning(
+                    "BrowserPool: all %d browsers down — waiting up to %.0fs for recycle",
+                    len(self.browsers), timeout,
+                )
+            await asyncio.sleep(poll)
 
     # ── External dead-browser notification ───────────────────────────────────
 

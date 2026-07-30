@@ -18,19 +18,24 @@ MANUAL_RESERVED = int(os.getenv("MANUAL_RESERVED", "2"))
 BROWSER_POOL_SIZE = int(os.getenv("BROWSER_POOL_SIZE", "2"))
 # Seconds to wait for a semaphore slot before returning 503.
 SCRAPE_TIMEOUT = float(os.getenv("SCRAPE_TIMEOUT", "60"))
+# Seconds to wait for the browser pool to finish recycling before giving up.
+# A recycle takes ~5s per browser and they are serialized, so this needs headroom.
+BROWSER_ACQUIRE_TIMEOUT = float(os.getenv("BROWSER_ACQUIRE_TIMEOUT", "45"))
 
 SHEETS_BATCH_SIZE = 100  # Google Sheets API batch limit
 SHEET_HEADER_ROWS = 1  # Number of header rows in sheets
 CHUNK_SIZE = 50
 
 
-def get_browser(app_state):
-    """Round-robin browser from pool via BrowserPoolManager."""
-    if not app_state.browser_manager:
+async def get_browser(app_state):
+    """Round-robin browser from pool, waiting out an in-flight recycle.
+
+    Async because a crashed pool is back in a few seconds — failing fast here
+    used to mark every in-flight ASIN as a permanent error.
+    """
+    if not getattr(app_state, "browser_manager", None):
         raise RuntimeError("Browser pool not initialized — Playwright failed to start")
-    browser = app_state.browser_manager.get_browser()
-    if not browser:
-        raise RuntimeError("No browsers available in pool")
+    browser = await app_state.browser_manager.acquire(BROWSER_ACQUIRE_TIMEOUT)
     logger.debug("Browser picked: %d", id(browser))
     return browser
 

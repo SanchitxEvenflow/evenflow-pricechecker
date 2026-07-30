@@ -137,7 +137,7 @@ async def _run_full_scrape(app, tab_prefix: str, run_type: str, write_historical
 
         async def scrape_one(row_data: dict) -> dict:
             async with batch_context(app.state):
-                result = await scrape_amazon_with_retry(row_data["asin"], get_browser(app.state), proxy_manager, skip_curl=True, browser_manager=app.state.browser_manager)
+                result = await scrape_amazon_with_retry(row_data["asin"], await get_browser(app.state), proxy_manager, skip_curl=True, browser_manager=app.state.browser_manager)
                 result["row"] = row_data["row"]
             # semaphore released — curl runs here, overlapping with the next ASIN's Playwright scrape
             cookies = result.pop("_cookies", {}) or {}
@@ -866,8 +866,9 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str, write_
             app.state.instamart_cron_status["progress"] = progress["cells"] // n_cities
 
         async def _sweep(loc: dict) -> None:
-            browser = browser_manager.get_browser()
-            if not browser:
+            try:
+                browser = await browser_manager.acquire()
+            except RuntimeError:
                 logger.error("Instamart: no browser available for city %s", loc["name"])
                 return
             async with city_sem:
@@ -1267,7 +1268,7 @@ async def _run_full_flipkart_scrape(app, tab_prefix: str, run_type: str, write_h
 
         async def scrape_one(row_data: dict) -> dict:
             async with batch_context(app.state):
-                result = await scrape_flipkart(row_data["fsn"], get_browser(app.state), proxy_manager)
+                result = await scrape_flipkart(row_data["fsn"], await get_browser(app.state), proxy_manager)
                 result["row"] = row_data["row"]
                 return result
 

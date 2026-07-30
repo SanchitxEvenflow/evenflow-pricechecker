@@ -37,7 +37,7 @@ async def check_instamart_price(body: InstamartRequest, request: Request):
     if cache is not None and cache_key in cache:
         result = cache[cache_key]
     else:
-        browser = request.app.state.browser_manager.get_browser() if getattr(request.app.state, "browser_manager", None) else None
+        browser = await request.app.state.browser_manager.acquire() if getattr(request.app.state, "browser_manager", None) else None
         if not browser:
             raise HTTPException(status_code=503, detail="Browser pool unavailable")
         _pool = getattr(request.app.state, "instamart_proxy_pool", None)
@@ -83,7 +83,7 @@ async def check_instamart_all_cities(body: InstamartAllCitiesRequest, request: R
         if cache is not None and cache_key in cache:
             return cache[cache_key].copy()
 
-        browser = app_state.browser_manager.get_browser() if getattr(app_state, "browser_manager", None) else None
+        browser = await app_state.browser_manager.acquire() if getattr(app_state, "browser_manager", None) else None
         if not browser:
             return {"product_id": product_id, "city": display_city, "status": "error",
                     "error_message": "browser pool unavailable", "price": None, "mrp": None,

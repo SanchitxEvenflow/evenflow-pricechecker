@@ -123,8 +123,9 @@ async def bootstrap_fkm_cookies(browser_manager, pincode: str = "560102") -> str
     logger.info("[FKM] Bootstrapping fresh session cookies via Playwright...")
     context = None
     try:
-        browser = browser_manager.get_browser()
-        if not browser:
+        try:
+            browser = await browser_manager.acquire()
+        except RuntimeError:
             logger.error("[FKM] No browsers available in pool")
             return ""
             
