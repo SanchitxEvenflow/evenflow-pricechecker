@@ -42,7 +42,7 @@ from blinkit.routes import router as blinkit_router
 from zepto.routes import router as zepto_router
 from instamart.routes import router as instamart_router
 from flipkart_minutes.routes import router as flipkart_minutes_router
-from scheduler import setup_scheduler
+from scheduler import setup_scheduler, resume_interrupted_scrape
 from schemas.price import (
     AmazonResponse,
     BothRequest,
@@ -261,7 +261,10 @@ async def lifespan(app: FastAPI):
         logger.info("Cron scheduler active — next run at %02d:%02d IST",
                     int(os.getenv("FLIPKART_CRON_HOUR", "10")),
                     int(os.getenv("FLIPKART_CRON_MINUTE", "0")))
-    
+
+    # Finish an Amazon cron run that a crash or host reboot killed mid-way.
+    app.state.resume_task = asyncio.create_task(resume_interrupted_scrape(app))
+
     logger.info("Price Checker service ready!")
 
     yield
@@ -271,6 +274,8 @@ async def lifespan(app: FastAPI):
     if getattr(app.state, "cron_scheduler", None):
         app.state.cron_scheduler.shutdown(wait=False)
         logger.info("Cron scheduler stopped")
+    if getattr(app.state, "resume_task", None):
+        app.state.resume_task.cancel()
     if getattr(app.state, "thread_pool", None):
         app.state.thread_pool.shutdown(wait=False)
         logger.info("Thread pool stopped")

@@ -52,8 +52,12 @@ def _persist() -> None:
         logger.exception("Failed to write log file")
 
 
-def create_log(run_type: str, total_asins: int) -> str:
-    """Create a new in-progress log entry. Returns the run_id."""
+def create_log(run_type: str, total_asins: int, sheet_tab: Optional[str] = None) -> str:
+    """Create a new in-progress log entry. Returns the run_id.
+
+    sheet_tab is recorded up front (not just on completion) so a run killed by a
+    crash or host reboot can be identified and resumed on the next startup.
+    """
     run_id = str(uuid.uuid4())[:8]
     entry = {
         "run_id": run_id,
@@ -63,7 +67,7 @@ def create_log(run_type: str, total_asins: int) -> str:
         "total_asins": total_asins,
         "success_count": 0,
         "failed_count": 0,
-        "sheet_tab": None,
+        "sheet_tab": sheet_tab,
         "status": "in_progress",
     }
     with _lock:

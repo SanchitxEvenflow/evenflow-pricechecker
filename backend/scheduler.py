@@ -38,7 +38,8 @@ logger = logging.getLogger(__name__)
 IST = timezone(timedelta(hours=5, minutes=30))
 
 
-async def _run_full_scrape(app, tab_prefix: str, run_type: str, write_historical: bool = True) -> None:
+async def _run_full_scrape(app, tab_prefix: str, run_type: str, write_historical: bool = True,
+                           resume_tab: str | None = None) -> None:
     """Core scrape logic shared by both automatic cron and manual trigger.
 
     Args:
@@ -46,6 +47,9 @@ async def _run_full_scrape(app, tab_prefix: str, run_type: str, write_historical
         tab_prefix: Prefix for the new tab name (e.g. "Run" or "Manual_Trigger")
         run_type: "automatic" or "manual" — used for logging
         write_historical: If True, appends results to the Historical tab (cron only).
+        resume_tab: Existing result tab to finish instead of creating a new one.
+            Reads the tab's own ASIN column for the work list, so it is unaffected
+            by edits to the source tab since the interrupted run started.
     """
     # Synchronous guard + lock. No await between check and set → no race in single-threaded asyncio.
     if app.state.cron_status.get("is_running"):
@@ -66,37 +70,58 @@ async def _run_full_scrape(app, tab_prefix: str, run_type: str, write_historical
         logger.info("Cron: starting %s scrape — sheet=%s source_tab=%s started_at=%s",
                     run_type, sheet_id, source_tab, run_start.strftime("%H:%M:%S"))
 
-        try:
-            source_rows = sheets_client.get_asins_with_rows(sheet_id, source_tab)
-        except Exception:
-            logger.exception("Cron: failed to read ASINs from source tab")
-            return
+        resume_filled: list[list[str]] = []
 
-        if not source_rows:
-            logger.warning("Cron: no ASINs found in source tab '%s' — skipping run", source_tab)
-            return
+        if resume_tab:
+            new_tab = resume_tab
+            try:
+                remapped, resume_filled = sheets_client.get_pending_rows(sheet_id, new_tab)
+            except Exception:
+                logger.exception("Cron: failed to read resume tab '%s'", new_tab)
+                return
 
-        now = datetime.now(IST)
-        new_tab = f"{tab_prefix}_{now.strftime('%Y-%m-%d_%H-%M')}"
-        asins = [r["asin"] for r in source_rows]
+            if not remapped:
+                logger.info("Cron: resume tab '%s' already complete — nothing to do", new_tab)
+                return
 
-        # Create log entry
-        run_id = run_logger.create_log(run_type, len(asins))
+            run_id = run_logger.create_log(run_type, len(remapped), new_tab)
+            logger.info("Cron: resuming tab '%s' — %d ASINs pending, %d already done",
+                        new_tab, len(remapped), len(resume_filled))
+        else:
+            try:
+                source_rows = sheets_client.get_asins_with_rows(sheet_id, source_tab)
+            except Exception:
+                logger.exception("Cron: failed to read ASINs from source tab")
+                return
 
-        try:
-            sheets_client.create_tab(sheet_id, new_tab)
-            sheets_client.write_header_and_asins(sheet_id, new_tab, asins)
-            logger.info("Cron: created tab '%s' with %d ASINs", new_tab, len(asins))
-        except Exception as e:
-            logger.exception("Cron: failed to create result tab '%s'", new_tab)
-            app.state.cron_status["error"] = f"Failed to create tab '{new_tab}'"
-            run_logger.fail_log(run_id, f"Failed to create tab '{new_tab}': {e}")
-            return
+            if not source_rows:
+                logger.warning("Cron: no ASINs found in source tab '%s' — skipping run", source_tab)
+                return
 
-        # Remap row numbers — header is row 1, ASINs start at row 2
-        remapped = [{"row": i + 2, "asin": asin} for i, asin in enumerate(asins)]
+            now = datetime.now(IST)
+            new_tab = f"{tab_prefix}_{now.strftime('%Y-%m-%d_%H-%M')}"
+            asins = [r["asin"] for r in source_rows]
+
+            # Create log entry
+            run_id = run_logger.create_log(run_type, len(asins), new_tab)
+
+            try:
+                sheets_client.create_tab(sheet_id, new_tab)
+                sheets_client.write_header_and_asins(sheet_id, new_tab, asins)
+                logger.info("Cron: created tab '%s' with %d ASINs", new_tab, len(asins))
+            except Exception as e:
+                logger.exception("Cron: failed to create result tab '%s'", new_tab)
+                app.state.cron_status["error"] = f"Failed to create tab '{new_tab}'"
+                run_logger.fail_log(run_id, f"Failed to create tab '{new_tab}': {e}")
+                return
+
+            # Remap row numbers — header is row 1, ASINs start at row 2
+            remapped = [{"row": i + 2, "asin": asin} for i, asin in enumerate(asins)]
+
         row_to_asin = {r["row"]: r["asin"] for r in remapped}
-        historical_rows: list[list] = []
+        # Seed with rows the interrupted run already wrote — Historical is only appended
+        # at the end, so without this a resume would lose everything scraped before the crash.
+        historical_rows: list[list] = [r + [new_tab] for r in resume_filled]
 
         app.state.cron_status.update({
             "last_run_at": run_start.isoformat(),
@@ -222,6 +247,34 @@ async def run_scheduled_scrape(app) -> None:
         logger.warning("Cron: scheduled scrape skipped — a run is already active (duplicate trigger?)")
         return
     await _run_full_scrape(app, tab_prefix="Run", run_type="automatic")
+
+
+async def resume_interrupted_scrape(app) -> None:
+    """On startup, finish an automatic Amazon run that a crash or host reboot cut short.
+
+    Called from the lifespan startup. The interrupted entry is failed first, so the
+    resume's own log entry becomes the next resume target if this run dies too.
+    """
+    try:
+        stale = next(
+            (e for e in run_logger.get_all_logs()
+             if e.get("status") == "in_progress"
+             and e.get("type") == "automatic"
+             and e.get("sheet_tab")),
+            None,
+        )
+    except Exception:
+        logger.exception("Cron: could not read run log for resume check")
+        return
+
+    if not stale:
+        return
+
+    logger.warning("Cron: run %s left in_progress on tab '%s' — resuming",
+                   stale["run_id"], stale["sheet_tab"])
+    run_logger.fail_log(stale["run_id"], "Interrupted (crash or reboot) — resumed in a new run")
+    await _run_full_scrape(app, tab_prefix="Run", run_type="automatic",
+                           resume_tab=stale["sheet_tab"])
 
 
 async def run_manual_trigger(app) -> None:

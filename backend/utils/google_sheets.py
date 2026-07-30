@@ -86,6 +86,37 @@ class GoogleSheetsClient:
 
         return asins
 
+    def get_pending_rows(self, spreadsheet_id: str, tab_name: str) -> tuple[list[dict[str, Any]], list[list[str]]]:
+        """Split an existing Amazon result tab into (rows still to scrape, rows already filled).
+
+        Used to resume a run that a crash or host reboot cut short. A row is pending
+        when column A holds an ASIN but B:K are all empty. Filled rows come back as
+        [asin, *B:K padded to 10] so the resumed run can still write them to Historical.
+        """
+        if not self.service:
+            raise ValueError("Google Sheets service not initialized (missing credentials).")
+
+        result = self.service.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range=f"{self._tab(tab_name)}!A:K"
+        ).execute(num_retries=3)
+
+        values = result.get("values", [])
+
+        pending: list[dict[str, Any]] = []
+        filled: list[list[str]] = []
+        for i in range(1, len(values)):
+            row = values[i]
+            if not row or not row[0].strip():
+                continue
+            rest = [c.strip() for c in row[1:11]]
+            if any(rest):
+                filled.append([row[0].strip()] + rest + [""] * (10 - len(rest)))
+            else:
+                pending.append({"row": i + 1, "asin": row[0].strip()})
+
+        return pending, filled
+
     def get_products_from_sheet(self, spreadsheet_id: str, tab_name: str) -> list[dict[str, Any]]:
         """Read columns A:D and return active product catalog for the picker UI.
 
