@@ -135,6 +135,18 @@ class BrowserPoolManager:
                 )
             await asyncio.sleep(poll)
 
+    async def recycle_all(self) -> None:
+        """Proactively restart every browser in the pool — call during an idle window.
+
+        Sequential, not parallel: launching 2 fresh Chromium processes at once
+        doubles peak memory during the swap; one at a time keeps that lower.
+        """
+        for idx in range(len(self.browsers)):
+            if self._recycling[idx]:
+                continue
+            self._recycling[idx] = True
+            await self._recycle(idx, self.browsers[idx])
+
     # ── External dead-browser notification ───────────────────────────────────
 
     def notify_dead(self, browser) -> None:

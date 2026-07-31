@@ -543,11 +543,16 @@ async def scrape_amazon(
                 if stored_cookies:
                     context_opts["storage_state"] = {"cookies": stored_cookies, "origins": []}
 
-            context = await browser.new_context(**context_opts)
+            # Unlike goto/wait_for_selector below, Playwright puts no timeout on
+            # context/page creation — under host memory pressure a degraded Chromium
+            # can hang here forever, holding the Snowpad slot acquired above and
+            # wedging every later attempt behind it. Bound it so a stuck browser
+            # fails into the existing retry/notify_dead path instead of hanging.
+            context = await asyncio.wait_for(browser.new_context(**context_opts), timeout=20)
             await context.add_init_script(STEALTH_SCRIPT)
             await context.route("**/*", _block_resources)
             await _set_delivery_location(context, "560102")
-            page = await context.new_page()
+            page = await asyncio.wait_for(context.new_page(), timeout=20)
 
             logger.info("Navigating to %s via %s%s", url, source, f" proxy={proxy}" if proxy else "")
             # "commit" returns once response headers land; we then gate on the element we

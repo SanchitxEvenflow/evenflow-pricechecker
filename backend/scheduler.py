@@ -1473,8 +1473,52 @@ def setup_scheduler(app) -> AsyncIOScheduler | None:
         coalesce=True,
     )
 
+    async def _recycle_browsers_job():
+        """Restart the whole browser pool — but only once no scrape (cron or
+        manual) is holding a total_sem permit. Waits up to 60s for in-flight
+        work to drain; if something's still running past that, recycles
+        anyway — closing a browser mid-request just triggers the scraper's
+        existing TargetClosedError retry path, so it's safe, not corrupting.
+        """
+        bm = getattr(app.state, "browser_manager", None)
+        if bm is None:
+            return
+        sem = app.state.total_sem
+        acquired = 0
+        try:
+            for _ in range(SCRAPE_CONCURRENCY):
+                try:
+                    await asyncio.wait_for(sem.acquire(), timeout=60)
+                    acquired += 1
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "BrowserPool: idle recycle — scrape(s) still active after 60s wait, recycling anyway"
+                    )
+                    break
+            logger.info("BrowserPool: idle recycle starting")
+            await bm.recycle_all()
+            logger.info("BrowserPool: idle recycle complete")
+        except Exception:
+            logger.exception("BrowserPool: idle recycle failed")
+        finally:
+            for _ in range(acquired):
+                sem.release()
+
+    recycle_hour = int(os.getenv("BROWSER_RECYCLE_CRON_HOUR", "2"))
+    recycle_minute = int(os.getenv("BROWSER_RECYCLE_CRON_MINUTE", "0"))
+    scheduler.add_job(
+        _recycle_browsers_job,
+        "cron",
+        hour=recycle_hour,
+        minute=recycle_minute,
+        id="browser_pool_idle_recycle",
+        max_instances=1,
+        coalesce=True,
+    )
+
     scheduler.start()
     logger.info("Cron: Amazon daily scrape scheduled at %02d:%02d IST", cron_hour, cron_minute)
+    logger.info("Cron: Browser pool idle recycle scheduled at %02d:%02d IST", recycle_hour, recycle_minute)
     logger.info("Cron: Flipkart daily scrape scheduled at %02d:%02d IST", flipkart_cron_hour, flipkart_cron_minute)
     logger.info("Cron: Instamart daily scrape scheduled at %02d:%02d IST", instamart_cron_hour, instamart_cron_minute)
     logger.info("Cron: Blinkit daily scrape scheduled at %02d:%02d IST", blinkit_cron_hour, blinkit_cron_minute)
