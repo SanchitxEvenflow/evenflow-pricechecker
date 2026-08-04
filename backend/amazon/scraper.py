@@ -71,6 +71,10 @@ MRP_SELECTORS = [
     "#priceblock_dealprice",
 ]
 
+RETURNS_SELECTORS = [
+    "#RETURNS_POLICY .icon-content a",
+]
+
 RATING_SELECTORS = [
     "#acrPopover .a-icon-alt",
     "#averageCustomerReviews .a-icon-alt",
@@ -485,7 +489,7 @@ async def scrape_amazon(
 
     _empty = {
         "asin": asin, "price": "", "mrp": None, "rating": None, "rating_count": None,
-        "rating_breakdown": None,
+        "rating_breakdown": None, "returnable": None,
         "rank_raw": None, "rank_value": None, "rank_category": None,
         "sub_rank_value": None, "sub_rank_category": None,
         "parent_node": None, "child_node": None, "category_path": None,
@@ -609,6 +613,7 @@ async def scrape_amazon(
             mrp = _extract_text(soup, MRP_SELECTORS)
             rating = _extract_rating(soup)
             rating_count = _extract_rating_count(soup)
+            returnable = _extract_text(soup, RETURNS_SELECTORS)
 
             # Extract BSR + category from Playwright HTML (already loaded successfully)
             bsr_data = _extract_best_seller_rank(soup)
@@ -661,6 +666,7 @@ async def scrape_amazon(
                 "rating": rating,
                 "rating_count": rating_count,
                 "rating_breakdown": breakdown,
+                "returnable": returnable,
                 "rank_raw": rank_raw,
                 "rank_value": rank_value,
                 "rank_category": rank_category,

@@ -85,7 +85,7 @@ export function useAmazonManualScrape() {
     if (results.length === 0) return;
 
     const headers = [
-      "ASIN", "Title", "Status", "Price", "Rating", "Rating Count", "Rating Breakdown",
+      "ASIN", "Title", "Status", "Price", "Rating", "Rating Count", "Rating Breakdown", "Returnable",
       "Parent Node", "Parent Rank", "Child Node", "Child Rank", "URL"
     ];
 
@@ -106,6 +106,7 @@ export function useAmazonManualScrape() {
         cleanNum(r.rating),
         cleanNum(r.rating_count),
         csvEscape(bdStr),
+        csvEscape(r.returnable || ""),
         csvEscape(r.parent_node || ""),
         cleanNum(r.rank_value),
         csvEscape(r.child_node || ""),

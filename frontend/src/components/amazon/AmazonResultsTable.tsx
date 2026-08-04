@@ -16,7 +16,7 @@ export function AmazonResultsTable({ t, results, onDownloadCSV }: { t: ThemeClas
         <table className="w-full text-left border-collapse">
           <thead>
             <tr className={`border-b ${t.border} ${t.thead}`}>
-              {["ASIN", "Title", "Status", "Price", "Rating", "Rating Count", "Rating Breakdown", "Parent Node", "Parent Rank", "Child Node", "Child Rank", "URL"].map(h => (
+              {["ASIN", "Title", "Status", "Price", "Rating", "Rating Count", "Rating Breakdown", "Returnable", "Parent Node", "Parent Rank", "Child Node", "Child Rank", "URL"].map(h => (
                 <th key={h} className={`px-4 py-4 text-xs font-semibold ${t.muted} uppercase tracking-wider`}>{h}</th>
               ))}
             </tr>
@@ -38,6 +38,7 @@ export function AmazonResultsTable({ t, results, onDownloadCSV }: { t: ThemeClas
                   <td className={`px-4 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.rating ? `${r.rating} ★` : "—"}</td>
                   <td className={`px-4 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.rating_count || "—"}</td>
                   <td className={`px-4 py-4 text-xs ${t.muted} font-mono`}>{bdStr || "—"}</td>
+                  <td className={`px-4 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.returnable || "—"}</td>
                   <td className={`px-4 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.parent_node || "—"}</td>
                   <td className={`px-4 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.rank_value ? `#${r.rank_value}` : "—"}</td>
                   <td className={`px-4 py-4 whitespace-nowrap text-sm ${t.muted}`}>{r.child_node || "—"}</td>

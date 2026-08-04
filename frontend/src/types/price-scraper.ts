@@ -13,6 +13,7 @@ export interface ScrapeResult {
   rating?: string;
   rating_count?: string;
   rating_breakdown?: RatingBreakdown | null;
+  returnable?: string | null;
   parent_node?: string | null;
   rank_value?: string | null;
   child_node?: string | null;
