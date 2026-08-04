@@ -1384,7 +1384,10 @@ def setup_scheduler(app) -> AsyncIOScheduler | None:
 
     cron_hour = int(os.getenv("AMAZON_CRON_HOUR", "10"))
     cron_minute = int(os.getenv("AMAZON_CRON_MINUTE", "0"))
-    scheduler = AsyncIOScheduler(timezone=IST)
+    # misfire_grace_time: default 1s drops a job outright if the loop is a few
+    # seconds late (e.g. another cron still scraping) — seen dropping Flipkart's
+    # run entirely on 2026-08-01 and 2026-08-04. Give jobs an hour of slack.
+    scheduler = AsyncIOScheduler(timezone=IST, job_defaults={"misfire_grace_time": 3600})
 
     scheduler.add_job(
         run_scheduled_scrape,
