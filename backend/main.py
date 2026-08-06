@@ -255,12 +255,16 @@ async def lifespan(app: FastAPI):
 
     app.state.cron_scheduler = setup_scheduler(app)
     if app.state.cron_scheduler:
-        logger.info("Cron scheduler active — next run at %02d:%02d IST",
-                    int(os.getenv("AMAZON_CRON_HOUR", "10")),
-                    int(os.getenv("AMAZON_CRON_MINUTE", "0")))
-        logger.info("Cron scheduler active — next run at %02d:%02d IST",
-                    int(os.getenv("FLIPKART_CRON_HOUR", "10")),
-                    int(os.getenv("FLIPKART_CRON_MINUTE", "0")))
+        logger.info("Cron scheduler active — Amazon runs at %02d:%02d and %02d:%02d IST",
+                    int(os.getenv("AMAZON_CRON_HOUR", "0")),
+                    int(os.getenv("AMAZON_CRON_MINUTE", "25")),
+                    int(os.getenv("AMAZON_CRON_HOUR_2", "4")),
+                    int(os.getenv("AMAZON_CRON_MINUTE_2", "0")))
+        logger.info("Cron scheduler active — Flipkart runs at %02d:%02d and %02d:%02d IST",
+                    int(os.getenv("FLIPKART_CRON_HOUR", "0")),
+                    int(os.getenv("FLIPKART_CRON_MINUTE", "0")),
+                    int(os.getenv("FLIPKART_CRON_HOUR_2", "8")),
+                    int(os.getenv("FLIPKART_CRON_MINUTE_2", "0")))
 
     # Finish an Amazon cron run that a crash or host reboot killed mid-way.
     app.state.resume_task = asyncio.create_task(resume_interrupted_scrape(app))

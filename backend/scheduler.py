@@ -99,7 +99,7 @@ async def _run_full_scrape(app, tab_prefix: str, run_type: str, write_historical
                 return
 
             now = datetime.now(IST)
-            new_tab = f"{tab_prefix}_{now.strftime('%Y-%m-%d')}"
+            new_tab = f"{tab_prefix}_{now.strftime('%Y-%m-%d_%H-%M')}"
             asins = [r["asin"] for r in source_rows]
 
             # Create log entry
@@ -319,7 +319,7 @@ async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str, write_hi
             return
 
         now = datetime.now(IST)
-        new_tab = f"{tab_prefix}_{now.strftime('%Y-%m-%d')}"
+        new_tab = f"{tab_prefix}_{now.strftime('%Y-%m-%d_%H-%M')}"
         pids = [r["asin"] for r in source_rows]  # get_asins_with_rows uses "asin" key
 
         run_id = run_logger.create_log(run_type, len(pids))
@@ -554,7 +554,7 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str, write_hist
             return
 
         now = datetime.now(IST)
-        new_tab = f"{tab_prefix}_{now.strftime('%Y-%m-%d')}"
+        new_tab = f"{tab_prefix}_{now.strftime('%Y-%m-%d_%H-%M')}"
         pids = [r["asin"] for r in source_rows]
 
         run_id = run_logger.create_log(run_type, len(pids))
@@ -802,7 +802,7 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str, write_
             return
 
         now = datetime.now(IST)
-        new_tab = f"{tab_prefix}_{now.strftime('%Y-%m-%d')}"
+        new_tab = f"{tab_prefix}_{now.strftime('%Y-%m-%d_%H-%M')}"
         pids = [r["asin"] for r in source_rows]
 
         run_id = run_logger.create_log(run_type, len(pids))
@@ -1013,7 +1013,7 @@ async def _run_full_flipkart_minutes_scrape(app, tab_prefix: str, run_type: str)
             return
 
         now = datetime.now(IST)
-        new_tab = f"{tab_prefix}_{now.strftime('%Y-%m-%d')}"
+        new_tab = f"{tab_prefix}_{now.strftime('%Y-%m-%d_%H-%M')}"
         pids = [r["asin"] for r in source_rows]
 
         run_id = run_logger.create_log(run_type, len(pids))
@@ -1234,7 +1234,7 @@ async def _run_full_flipkart_scrape(app, tab_prefix: str, run_type: str, write_h
             return
 
         now = datetime.now(IST)
-        new_tab = f"{tab_prefix}_{now.strftime('%Y-%m-%d')}"
+        new_tab = f"{tab_prefix}_{now.strftime('%Y-%m-%d_%H-%M')}"
         fsns = [r["asin"] for r in source_rows]  # get_asins_with_rows uses "asin" key
 
         run_id = run_logger.create_log(run_type, len(fsns))
@@ -1399,9 +1399,22 @@ def setup_scheduler(app) -> AsyncIOScheduler | None:
         max_instances=1,
         coalesce=True,
     )
-    
+
+    cron_hour_2 = int(os.getenv("AMAZON_CRON_HOUR_2", "4"))
+    cron_minute_2 = int(os.getenv("AMAZON_CRON_MINUTE_2", "0"))
+    scheduler.add_job(
+        run_scheduled_scrape,
+        "cron",
+        hour=cron_hour_2,
+        minute=cron_minute_2,
+        args=[app],
+        id="amazon_daily_scrape_2",
+        max_instances=1,
+        coalesce=True,
+    )
+
     flipkart_cron_hour = int(os.getenv("FLIPKART_CRON_HOUR", "0"))
-    flipkart_cron_minute = int(os.getenv("FLIPKART_CRON_MINUTE", "0"))
+    flipkart_cron_minute = int(os.getenv("FLIPKART_CRON_MINUTE", "5"))
     scheduler.add_job(
         run_scheduled_flipkart_scrape,
         "cron",
@@ -1409,6 +1422,19 @@ def setup_scheduler(app) -> AsyncIOScheduler | None:
         minute=flipkart_cron_minute,
         args=[app],
         id="flipkart_daily_scrape",
+        max_instances=1,
+        coalesce=True,
+    )
+
+    flipkart_cron_hour_2 = int(os.getenv("FLIPKART_CRON_HOUR_2", "8"))
+    flipkart_cron_minute_2 = int(os.getenv("FLIPKART_CRON_MINUTE_2", "0"))
+    scheduler.add_job(
+        run_scheduled_flipkart_scrape,
+        "cron",
+        hour=flipkart_cron_hour_2,
+        minute=flipkart_cron_minute_2,
+        args=[app],
+        id="flipkart_daily_scrape_2",
         max_instances=1,
         coalesce=True,
     )
