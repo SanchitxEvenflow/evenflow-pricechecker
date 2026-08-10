@@ -4,7 +4,7 @@ HTTP Client using curl_cffi for Blinkit's layout/product API.
 Ported from blinkitscraper/client.py — adapted for price-checker conventions.
 
 Key differences from the standalone scraper:
-  - Accepts ProxyManager and handles proxy rotation + retry internally (like amazon scraper)
+  - Routes through Snowpad SOCKS5 and handles retry internally (like amazon scraper)
   - Returns a plain dict (not Pydantic model) matching price-checker conventions
   - Status values: "available", "out_of_stock", "unserviceable", "error"
 """
@@ -17,7 +17,7 @@ from datetime import datetime, timezone, timedelta
 from curl_cffi import requests
 from curl_cffi.requests.errors import RequestsError
 
-from proxy.manager import ProxyManager
+from proxy.socks5_provider import get_provider as get_snowpad_provider
 
 logger = logging.getLogger(__name__)
 
@@ -189,13 +189,16 @@ def fetch_blinkit_data(
     lat: float,
     lon: float,
     city: str,
-    proxy_manager: ProxyManager | None = None,
 ) -> dict:
     """
     Fetch product data from Blinkit's layout/product API.
 
-    Retries up to min(5, pool_size) proxies on block/error, then falls back to
-    a direct connection — mirroring amazon scraper behaviour.
+    Retries up to 3 times on a fresh Snowpad SOCKS5 IP on block/error, then falls
+    back to a direct connection — mirroring amazon scraper behaviour.
+
+    Concurrency (Snowpad's connection ceiling) is gated by the async caller via
+    snowpad.acquire_slot()/release_slot() around the run_in_executor() dispatch,
+    not inside this synchronous function.
 
     This is a synchronous function (curl_cffi). The caller must wrap it with
     asyncio.loop.run_in_executor() when used in async contexts.
@@ -242,14 +245,16 @@ def fetch_blinkit_data(
 
     logger.info("POSTing to Blinkit for item_id=%s, city=%s (%s, %s)", item_id, city, lat, lon)
 
-    max_proxy_attempts = min(3, len(proxy_manager.active_pool) if proxy_manager else 0)
+    snowpad = get_snowpad_provider()
+    use_snowpad = snowpad.enabled
+    max_attempts = 3 if use_snowpad else 0
 
-    for attempt in range(max_proxy_attempts + 1):  # +1 = direct-connection fallback
+    for attempt in range(max_attempts + 1):  # +1 = direct-connection fallback
         proxy = None
-        if attempt < max_proxy_attempts and proxy_manager:
-            proxy = proxy_manager.get_proxy()
+        if attempt < max_attempts:
+            proxy = snowpad.curl_url()
         else:
-            logger.info("All proxies exhausted — trying direct connection for item_id=%s", item_id)
+            logger.info("All Snowpad attempts exhausted — trying direct connection for item_id=%s", item_id)
 
         proxies = {"http": proxy, "https": proxy} if proxy else None
         session = requests.Session(impersonate="chrome110", proxies=proxies)
@@ -257,7 +262,7 @@ def fetch_blinkit_data(
         try:
             # Phase 1: Landing page handshake — warm up cookies
             logger.info("Phase 1: Session handshake (attempt %d/%d) for item_id=%s",
-                        attempt + 1, max_proxy_attempts + 1, item_id)
+                        attempt + 1, max_attempts + 1, item_id)
             try:
                 landing = session.get("https://blinkit.com/robots.txt", headers=BROWSER_HEADERS, timeout=15)
                 if landing.status_code != 200:
@@ -281,17 +286,17 @@ def fetch_blinkit_data(
             if response.status_code in (401, 403):
                 logger.warning("Blocked (HTTP %d) on attempt %d for item_id=%s — rotating proxy",
                                response.status_code, attempt + 1, item_id)
-                if proxy_manager:
-                    proxy_manager.report_failure(proxy)
-                if attempt < max_proxy_attempts:
+                if use_snowpad:
+                    snowpad.report_failure()
+                if attempt < max_attempts:
                     continue
                 return _error_result(f"blocked_{response.status_code}")
 
             if response.status_code != 200:
                 logger.error("Blinkit API returned status %d for item_id=%s", response.status_code, item_id)
-                if proxy_manager:
-                    proxy_manager.report_failure(proxy)
-                if attempt < max_proxy_attempts:
+                if use_snowpad:
+                    snowpad.report_failure()
+                if attempt < max_attempts:
                     continue
                 return _error_result(f"http_{response.status_code}")
 
@@ -302,8 +307,8 @@ def fetch_blinkit_data(
                 snippets = json_data.get("response", {}).get("snippets")
                 if snippets is None:
                     logger.warning("Item %s is unserviceable at pincode %s", item_id, pincode)
-                    if proxy_manager:
-                        proxy_manager.report_success(proxy)
+                    if use_snowpad:
+                        snowpad.report_success()
                     return {
                         "product_id": item_id,
                         "city": city,
@@ -317,17 +322,17 @@ def fetch_blinkit_data(
                     }
                 else:
                     logger.error("Blinkit rejected with non-null snippets: %s", response.text[:300])
-                    if proxy_manager:
-                        proxy_manager.report_failure(proxy)
-                    if attempt < max_proxy_attempts:
+                    if use_snowpad:
+                        snowpad.report_failure()
+                    if attempt < max_attempts:
                         continue
                     return _error_result("rejected_with_snippets")
 
             # Extract product data from nested layout tree
             product = _extract_product_from_layout(json_data)
 
-            if proxy_manager:
-                proxy_manager.report_success(proxy)
+            if use_snowpad:
+                snowpad.report_success()
 
             return {
                 "product_id": item_id,
@@ -343,9 +348,9 @@ def fetch_blinkit_data(
 
         except (RequestsError, TimeoutError) as e:
             logger.error("Network/timeout error on attempt %d for item_id=%s: %s", attempt + 1, item_id, e)
-            if proxy_manager:
-                proxy_manager.report_failure(proxy)
-            if attempt < max_proxy_attempts:
+            if use_snowpad:
+                snowpad.report_failure()
+            if attempt < max_attempts:
                 continue
             return _error_result(f"network_error: {e}")
 
@@ -355,17 +360,17 @@ def fetch_blinkit_data(
                 text = response.text.lower()
                 if "cloudflare" in text or "<html" in text:
                     logger.error("Cloudflare challenge detected — rotate DEVICE_ID or proxies")
-                    if proxy_manager:
-                        proxy_manager.report_failure(proxy)
-                    if attempt < max_proxy_attempts:
+                    if use_snowpad:
+                        snowpad.report_failure()
+                    if attempt < max_attempts:
                         continue
             return _error_result(f"extraction_error: {e}")
 
         except Exception as e:
             logger.error("Unexpected error on attempt %d for item_id=%s: %s", attempt + 1, item_id, e)
-            if proxy_manager:
-                proxy_manager.report_failure(proxy)
-            if attempt < max_proxy_attempts:
+            if use_snowpad:
+                snowpad.report_failure()
+            if attempt < max_attempts:
                 continue
             return _error_result(f"unexpected: {e}")
 

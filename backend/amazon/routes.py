@@ -35,9 +35,8 @@ async def check_amazon_price(body: AmazonRequest, request: Request):
     if cache is not None and cache_key in cache:
         result = cache[cache_key]
     else:
-        proxy_manager = request.app.state.proxy_manager
         async with sem_with_timeout(request.app.state.total_sem):
-            result = await scrape_amazon_with_retry(body.asin, await get_browser(request.app.state), proxy_manager, skip_curl=True, browser_manager=request.app.state.browser_manager)
+            result = await scrape_amazon_with_retry(body.asin, await get_browser(request.app.state), skip_curl=True, browser_manager=request.app.state.browser_manager)
         cookies = result.pop("_cookies", {}) or {}
         if cookies:
             curl_data = await fetch_curl_supplement(body.asin, cookies)
@@ -103,9 +102,9 @@ class ConfigResponse(BaseModel):
 _format_update = format_update
 
 
-async def _scrape_with_sem(asin: str, row: int, app_state, proxy_manager) -> dict:
+async def _scrape_with_sem(asin: str, row: int, app_state) -> dict:
     async with batch_context(app_state):
-        result = await scrape_amazon_with_retry(asin, await get_browser(app_state), proxy_manager, skip_curl=True, browser_manager=app_state.browser_manager)
+        result = await scrape_amazon_with_retry(asin, await get_browser(app_state), skip_curl=True, browser_manager=app_state.browser_manager)
         result["row"] = row
     cookies = result.pop("_cookies", {}) or {}
     if cookies:
@@ -234,8 +233,6 @@ async def scrape_batch(
     sheets_client: GoogleSheetsClient = Depends(get_sheets_client),
 ):
     """Scrape all ASINs with concurrency control, writing to sheets every 50 results."""
-    proxy_manager = request.app.state.proxy_manager
-
     if not body.rows:
         return {"status": "success", "message": "No rows to process", "data": []}
 
@@ -243,7 +240,7 @@ async def scrape_batch(
     pending_writes: list[dict] = []
 
     tasks = [
-        asyncio.create_task(_scrape_with_sem(r["asin"], r["row"], request.app.state, proxy_manager))
+        asyncio.create_task(_scrape_with_sem(r["asin"], r["row"], request.app.state))
         for r in body.rows
     ]
 
@@ -283,7 +280,6 @@ async def scrape_batch_stream(
 ):
     """Stream scrape results as SSE events. Each ASIN result is sent as it completes.
     Sheets are written every 50 results. Final event: {"done": true, "total": N}."""
-    proxy_manager = request.app.state.proxy_manager
     queue: asyncio.Queue = asyncio.Queue()
     total = len(body.rows)
 
@@ -296,7 +292,7 @@ async def scrape_batch_stream(
 
     async def worker(row_data: dict) -> None:
         async with batch_context(app_state):
-            result = await scrape_amazon_with_retry(row_data["asin"], await get_browser(app_state), proxy_manager, skip_curl=True, browser_manager=app_state.browser_manager)
+            result = await scrape_amazon_with_retry(row_data["asin"], await get_browser(app_state), skip_curl=True, browser_manager=app_state.browser_manager)
             result["row"] = row_data["row"]
         try:
             cookies = result.pop("_cookies", {}) or {}
@@ -355,8 +351,6 @@ def _validate_asin(asin: str) -> bool:
 @manual_router.post("/scrape-manual")
 async def scrape_manual(body: ManualScrapeRequest, request: Request):
     """Scrape a list of ASINs manually. Results are streamed via SSE — no sheet writes."""
-    proxy_manager = request.app.state.proxy_manager
-
     if not request.app.state.playwright_ready:
         raise HTTPException(status_code=503, detail="Playwright browser not available")
 
@@ -414,7 +408,7 @@ async def scrape_manual(body: ManualScrapeRequest, request: Request):
         # slot, so a manual worker always gets one within one scrape-cycle.
         async with app_state.total_sem:
             result = await scrape_amazon_with_retry(
-                asin, await get_browser(app_state), proxy_manager,
+                asin, await get_browser(app_state),
                 skip_curl=True, browser_manager=app_state.browser_manager,
             )
         try:

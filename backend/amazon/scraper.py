@@ -8,7 +8,6 @@ import re
 import threading
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 from curl_cffi import requests as curl_requests
@@ -16,7 +15,6 @@ from dotenv import load_dotenv
 from playwright.async_api import Browser
 from playwright._impl._errors import TargetClosedError
 
-from proxy.manager import ProxyManager
 from proxy.socks5_provider import get_provider as get_snowpad_provider
 from utils.headers import UA_POOL
 
@@ -25,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
-# Per-source success/fail counts — which proxy tier (snowpad/webshare/direct) is
+# Per-source success/fail counts — which proxy tier (snowpad/direct) is
 # actually resolving Amazon scrapes, vs. just "some tier in the fallback chain did".
 _source_stats_lock = threading.Lock()
 _source_stats: dict[str, dict[str, int]] = {}
@@ -38,7 +36,7 @@ def _record_source_result(source: str, success: bool) -> None:
 
 
 def get_source_stats() -> dict[str, dict[str, int]]:
-    """Snapshot of per-source (snowpad/webshare/direct) success/fail counts."""
+    """Snapshot of per-source (snowpad/direct) success/fail counts."""
     with _source_stats_lock:
         return {k: dict(v) for k, v in _source_stats.items()}
 
@@ -326,17 +324,6 @@ def _detect_status(soup: BeautifulSoup, response_text: str, asin: str, page_url:
     return "check_price"
 
 
-def _parse_proxy(proxy_url: str) -> dict:
-    """Parse proxy URL into Playwright's proxy format dict."""
-    parsed = urlparse(proxy_url)
-    result: dict = {"server": f"{parsed.scheme}://{parsed.hostname}:{parsed.port}"}
-    if parsed.username:
-        result["username"] = parsed.username
-    if parsed.password:
-        result["password"] = parsed.password
-    return result
-
-
 async def _safe_close_context(context) -> None:
     """Safely close a Playwright browser context — never leak."""
     if context:
@@ -473,17 +460,16 @@ def merge_curl_supplement(result: dict, curl_data: dict) -> None:
 async def scrape_amazon(
     asin: str,
     browser: Browser,
-    proxy_manager: ProxyManager,
     skip_curl: bool = False,
     browser_manager=None,  # BrowserPoolManager — passed so dead browsers can be reported
 ) -> dict:
     """
     Scrape Amazon.in product page for price data using a real Playwright browser context.
 
-    Tries up to min(3, proxy_pool_size) proxies then falls back to a direct connection.
-    If the browser has crashed (TargetClosedError), notifies the pool manager to recycle
-    it and returns an error immediately — no point retrying on a dead browser.
-    Always returns a dict — never raises exceptions to the caller.
+    Tries Snowpad SOCKS5 (Indian mobile-carrier IPs) up to 3 times, then falls back to
+    a direct connection. If the browser has crashed (TargetClosedError), notifies the
+    pool manager to recycle it and returns an error immediately — no point retrying on
+    a dead browser. Always returns a dict — never raises exceptions to the caller.
     """
     url = f"https://www.amazon.in/dp/{asin}?th=1"
 
@@ -497,23 +483,19 @@ async def scrape_amazon(
     }
 
     # Snowpad SOCKS5 (Indian mobile-carrier IPs) goes first when enabled — it showed a
-    # 0/8 block rate against Amazon.in in testing vs. Webshare's ~80-90%, since mobile
-    # ASNs don't carry the datacenter reputation contamination Amazon's WAF blocklists.
-    # Webshare + direct remain as fallback tiers if Snowpad itself is down/misconfigured.
+    # 0/8 block rate against Amazon.in in testing, since mobile ASNs don't carry the
+    # datacenter reputation contamination Amazon's WAF blocklists. Direct connection
+    # remains as the last-resort tier if Snowpad itself is down/misconfigured.
     snowpad = get_snowpad_provider()
     use_snowpad = snowpad.enabled
 
-    proxy_sources: list[str] = []
-    if use_snowpad:
-        proxy_sources += ["snowpad", "snowpad"]  # 1 retry on a fresh rotating Snowpad IP
-    proxy_sources += ["webshare"] * (1 if use_snowpad else min(3, len(proxy_manager.active_pool) or 1))
+    proxy_sources: list[str] = ["snowpad", "snowpad", "snowpad"] if use_snowpad else []
     proxy_sources += ["direct"]
     last_attempt_idx = len(proxy_sources) - 1
 
     context = None
 
     for attempt, source in enumerate(proxy_sources):
-        proxy = None
         snowpad_slot_held = False
         try:
             if attempt > 0:
@@ -525,9 +507,7 @@ async def scrape_amazon(
                 logger.info("Amazon scrape attempt %d/%d (%s) for ASIN %s",
                             attempt + 1, len(proxy_sources), source, asin)
 
-            if source == "webshare":
-                proxy = proxy_manager.get_proxy()
-            elif source == "direct":
+            if source == "direct":
                 logger.info("Trying direct connection for ASIN %s", asin)
 
             user_agent = random.choice(UA_POOL)
@@ -541,11 +521,6 @@ async def scrape_amazon(
                 await snowpad.acquire_slot()
                 snowpad_slot_held = True
                 context_opts["proxy"] = await snowpad.bridge_proxy()
-            elif proxy:
-                context_opts["proxy"] = _parse_proxy(proxy)
-                stored_cookies = proxy_manager.get_cookies(proxy)
-                if stored_cookies:
-                    context_opts["storage_state"] = {"cookies": stored_cookies, "origins": []}
 
             # Unlike goto/wait_for_selector below, Playwright puts no timeout on
             # context/page creation — under host memory pressure a degraded Chromium
@@ -558,7 +533,7 @@ async def scrape_amazon(
             await _set_delivery_location(context, "560102")
             page = await asyncio.wait_for(context.new_page(), timeout=20)
 
-            logger.info("Navigating to %s via %s%s", url, source, f" proxy={proxy}" if proxy else "")
+            logger.info("Navigating to %s via %s", url, source)
             # "commit" returns once response headers land; we then gate on the element we
             # actually need. Waiting for full domcontentloaded on Amazon's ~2.5MB product
             # HTML over a mobile-carrier exit IP cost ~9s/attempt for no extra data.
@@ -588,8 +563,6 @@ async def scrape_amazon(
             if status in ("blocked", "not_found"):
                 if source == "snowpad":
                     snowpad.report_failure()
-                else:
-                    proxy_manager.report_failure(proxy)
                 _record_source_result(source, success=False)
                 if attempt < last_attempt_idx:
                     logger.warning("%s on attempt %d (%s) for ASIN %s — retrying with new proxy", status, attempt + 1, source, asin)
@@ -604,8 +577,6 @@ async def scrape_amazon(
             if status in ("unavailable", "suppressed"):
                 if source == "snowpad":
                     snowpad.report_success()
-                else:
-                    proxy_manager.report_success(proxy)
                 _record_source_result(source, success=True)
                 return {**_empty, "status": status, "checked_at": datetime.now(IST).isoformat()}
 
@@ -624,10 +595,6 @@ async def scrape_amazon(
             # When skip_curl=True the caller runs curl outside batch_context for better throughput.
             playwright_cookies = await context.cookies()
             cookie_dict = {c["name"]: c["value"] for c in playwright_cookies}
-            if source == "webshare":
-                # Snowpad rotates IPs per-connection, so there's no stable proxy key to
-                # warm a cookie jar against — only Webshare's fixed gateway string benefits.
-                proxy_manager.save_cookies(proxy, playwright_cookies)
 
             if not skip_curl:
                 curl_data = await _fetch_curl_data(asin, cookies=cookie_dict)
@@ -652,8 +619,6 @@ async def scrape_amazon(
 
             if source == "snowpad":
                 snowpad.report_success()
-            else:
-                proxy_manager.report_success(proxy)
             _record_source_result(source, success=True)
 
             logger.info("Amazon scraped ASIN %s: price=%s, rating=%s, rank=%s, parent=%s, status=%s",
@@ -708,8 +673,6 @@ async def scrape_amazon(
             logger.exception("Amazon scrape error for ASIN %s (attempt %d): %s", asin, attempt + 1, str(e))
             if source == "snowpad":
                 snowpad.report_failure()
-            else:
-                proxy_manager.report_failure(proxy)
             _record_source_result(source, success=False)
             await _safe_close_context(context)
             context = None
@@ -726,7 +689,7 @@ async def scrape_amazon(
     return {**_empty, "status": "error", "message": "Max retries exceeded", "checked_at": datetime.now(IST).isoformat()}
 
 
-# Full proxy ladder (snowpad + webshare + direct) already ran inside scrape_amazon
+# Full proxy ladder (snowpad + direct) already ran inside scrape_amazon
 # before it gives up with "blocked" — this restarts that whole ladder fresh,
 # since a burned IP tier on attempt 1 doesn't mean the next fresh draw is burned too.
 AMAZON_BLOCKED_RETRIES = int(os.getenv("AMAZON_BLOCKED_RETRIES", "1"))
@@ -735,17 +698,16 @@ AMAZON_BLOCKED_RETRIES = int(os.getenv("AMAZON_BLOCKED_RETRIES", "1"))
 async def scrape_amazon_with_retry(
     asin: str,
     browser: Browser,
-    proxy_manager: ProxyManager,
     skip_curl: bool = False,
     browser_manager=None,
 ) -> dict:
     """scrape_amazon, retrying the whole ASIN if every proxy tier came back blocked."""
-    result = await scrape_amazon(asin, browser, proxy_manager, skip_curl=skip_curl, browser_manager=browser_manager)
+    result = await scrape_amazon(asin, browser, skip_curl=skip_curl, browser_manager=browser_manager)
     attempt = 0
     while result.get("status") == "blocked" and attempt < AMAZON_BLOCKED_RETRIES:
         attempt += 1
         logger.warning("ASIN %s blocked on full proxy ladder — retrying whole scrape (%d/%d)",
                         asin, attempt, AMAZON_BLOCKED_RETRIES)
         await asyncio.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
-        result = await scrape_amazon(asin, browser, proxy_manager, skip_curl=skip_curl, browser_manager=browser_manager)
+        result = await scrape_amazon(asin, browser, skip_curl=skip_curl, browser_manager=browser_manager)
     return result

@@ -30,7 +30,7 @@ from auth import (
     verify_token,
 )
 
-from proxy.manager import ProxyManager
+from proxy.socks5_provider import get_provider as get_snowpad_provider
 from amazon.routes import price_router as amazon_price_router
 from amazon.routes import sheets_router as amazon_sheets_router
 from amazon.routes import manual_router as amazon_manual_router
@@ -78,7 +78,7 @@ async def lifespan(app: FastAPI):
     # ── Startup ──
     logger.info("Starting Price Checker service...")
 
-    """Startup: init ProxyManager + launch Playwright browser. Shutdown: close browser."""
+    """Startup: init Snowpad SOCKS5 provider + launch Playwright browser. Shutdown: close browser."""
     # Monkey-patch IocpProactor.accept to prevent WinError 87 from killing the accept loop
     if sys.platform == "win32":
         import asyncio.windows_events as _aio_win_events
@@ -94,16 +94,8 @@ async def lifespan(app: FastAPI):
                 raise
         _aio_win_events.IocpProactor.accept = _patched_accept
 
-    # Initialize proxy manager
-    proxy_file = os.getenv("PROXY_FILE", "proxies.txt")
-    app.state.proxy_manager = ProxyManager(proxy_file)
-    app.state.proxy_manager_task = asyncio.create_task(app.state.proxy_manager.resurrect_loop())
-    proxy_status = app.state.proxy_manager.status()
-    logger.info("Proxy pool: %d active, %d dead", proxy_status["active"], proxy_status["dead"])
-
-    # Zepto now shares the main Webshare proxy pool (BrightData removed).
-    # Keep the attribute name for backwards compat with routes/scheduler.
-    app.state.zepto_proxy_manager = app.state.proxy_manager
+    snowpad_status = get_snowpad_provider().status()
+    logger.info("Snowpad SOCKS5 proxy: enabled=%s", snowpad_status["enabled"])
 
     # Initialize Google Sheets client and Thread Pool
     # Size to cover simultaneous Blinkit + Zepto executor concurrency plus headroom.
@@ -207,9 +199,6 @@ async def lifespan(app: FastAPI):
         "progress": None,
         "error": None,
     }
-    # Instamart-only sticky proxy pool (Webshare API). None-safe: runs direct if unset.
-    from instamart.proxy_provider import ProxyPool
-    app.state.instamart_proxy_pool = ProxyPool()
     app.state.flipkart_minutes_cron_status = {
         "is_running": False,
         "last_run_at": None,
@@ -286,9 +275,6 @@ async def lifespan(app: FastAPI):
     if getattr(app.state, "browser_manager", None):
         await app.state.browser_manager.close_all()
         logger.info("Playwright browser pool closed")
-    if getattr(app.state, "proxy_manager_task", None):
-        app.state.proxy_manager_task.cancel()
-        
     if playwright_instance:
         try:
             await playwright_instance.stop()
@@ -443,21 +429,21 @@ async def get_all_cron_status(request: Request):
 
 @app.get("/proxy-status")
 async def proxy_status(request: Request):
-    """Return per-proxy breakdown — failure count, cooldown state, dead-since."""
-    return request.app.state.proxy_manager.detail()
+    """Return Snowpad SOCKS5 provider status."""
+    return get_snowpad_provider().status()
 
 @app.get("/amazon/source-stats")
 async def amazon_source_stats():
-    """Per-source (snowpad/webshare/direct) success/fail counts for Amazon scrapes."""
+    """Per-source (snowpad/direct) success/fail counts for Amazon scrapes."""
     return amazon_scraper.get_source_stats()
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     """Return service status, proxy pool size, and Playwright readiness."""
-    proxy_status = app.state.proxy_manager.status()
+    snowpad_status = get_snowpad_provider().status()
     return HealthResponse(
         status="ok",
-        proxy_pool_size=proxy_status["active"],
+        proxy_pool_size=snowpad_status["max_concurrency"] if snowpad_status["enabled"] else 0,
         playwright_ready=getattr(app.state, "playwright_ready", False),
         timestamp=datetime.now(IST),
     )
@@ -468,19 +454,17 @@ async def health_check():
 @app.post("/price/both", response_model=BothResponse, tags=["Price"])
 async def check_both_prices(body: BothRequest, request: Request):
     """Scrape both Amazon.in and Flipkart.in in parallel."""
-    proxy_manager = request.app.state.proxy_manager
-
     # Run each scraper sequentially under its own semaphore slot to avoid holding
     # two browser slots simultaneously, which would halve effective concurrency.
     async with sem_with_timeout(request.app.state.total_sem):
-        amazon_result = await scrape_amazon_with_retry(body.asin, await get_browser(request.app.state), proxy_manager, skip_curl=True, browser_manager=request.app.state.browser_manager)
+        amazon_result = await scrape_amazon_with_retry(body.asin, await get_browser(request.app.state), skip_curl=True, browser_manager=request.app.state.browser_manager)
     amazon_cookies = amazon_result.pop("_cookies", {}) or {}
     if amazon_cookies:
         curl_data = await fetch_curl_supplement(body.asin, amazon_cookies)
         merge_curl_supplement(amazon_result, curl_data)
 
     async with sem_with_timeout(request.app.state.total_sem):
-        flipkart_result = await scrape_flipkart(body.fsn, await get_browser(request.app.state), proxy_manager)
+        flipkart_result = await scrape_flipkart(body.fsn, await get_browser(request.app.state))
 
     # Calculate price difference
     price_diff, cheaper_on = _calculate_price_diff(

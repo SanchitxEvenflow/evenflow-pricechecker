@@ -23,10 +23,14 @@ Environment variables required (set in .env):
   SNOWPAD_PASS     — your Snowpad proxy password
   SNOWPAD_HOST     — proxy gateway host   (default: gw.snowpad.io)
   SNOWPAD_PORT     — proxy gateway port   (default: 9999)
-  SNOWPAD_ENABLED  — set to "true" to activate (default: false, uses Webshare fallback)
+  SNOWPAD_ENABLED  — set to "true" to activate (default: false)
 
-Fallback: if SNOWPAD_ENABLED is not "true" or credentials are missing,
-all methods return None so callers continue using existing Webshare / direct logic.
+Sticky sessions: pass session_id to curl_url()/bridge_proxy() to pin the same
+exit IP for up to ~10 minutes (Snowpad's `-session-<id>` username suffix).
+Used by Instamart, whose AWS WAF binds its JS-challenge token to the solving IP.
+
+If SNOWPAD_ENABLED is not "true" or credentials are missing, all methods
+return None so callers fall back to a direct connection.
 """
 
 import asyncio
@@ -55,7 +59,7 @@ class Socks5Provider:
         self._pass: str = ""
         self._host: str = "gw.snowpad.io"
         self._port: int = 9999
-        # Failure tracking — mirrors ProxyManager pattern
+        # Failure tracking
         self._fail_count: int = 0
         self._MAX_FAILS_BEFORE_WARN = 5
         # Trial plan caps concurrent connections (2) — a shared semaphore keeps every
@@ -63,7 +67,9 @@ class Socks5Provider:
         self._sem: asyncio.Semaphore | None = None
         # Chromium can't use an authenticated SOCKS5 proxy directly, so Playwright
         # callers go through a local in-process HTTP bridge instead (see bridge_proxy()).
-        self._bridge: Socks5HttpBridge | None = None
+        # Keyed by session_id (None = default rotating bridge) so sticky-session
+        # callers (Instamart) each get their own bridge/credential pair.
+        self._bridges: dict[str | None, Socks5HttpBridge] = {}
         self._bridge_start_lock = asyncio.Lock()
 
     def _init(self) -> None:
@@ -86,12 +92,13 @@ class Socks5Provider:
             max_concurrency = int(os.getenv("SNOWPAD_MAX_CONCURRENCY", "2"))
         except ValueError:
             max_concurrency = 2
+        self._max_concurrency = max_concurrency
         self._sem = asyncio.Semaphore(max_concurrency)
 
         if self._enabled and (not self._user or not self._pass):
             logger.warning(
                 "[Socks5Provider] SNOWPAD_ENABLED=true but SNOWPAD_USER / SNOWPAD_PASS "
-                "not set — SOCKS5 disabled, falling back to Webshare/direct."
+                "not set — SOCKS5 disabled, falling back to direct connections."
             )
             self._enabled = False
 
@@ -101,7 +108,7 @@ class Socks5Provider:
                 self._user, self._host, self._port,
             )
         else:
-            logger.info("[Socks5Provider] SOCKS5 disabled — Webshare/direct will be used.")
+            logger.info("[Socks5Provider] SOCKS5 disabled — direct connections will be used.")
 
         self._initialized = True
 
@@ -113,12 +120,15 @@ class Socks5Provider:
             self._init()
             return self._enabled
 
-    def curl_url(self) -> str | None:
+    def curl_url(self, session_id: str | None = None) -> str | None:
         """
         Return a socks5h:// URL string for curl_cffi proxies dict.
 
         Uses socks5h:// (not socks5://) so DNS is resolved via the proxy —
         prevents location leaks and geo-mismatch on Indian e-commerce sites.
+
+        Pass session_id to pin the same exit IP for ~10 minutes (Snowpad
+        sticky session via `-session-<id>` username suffix).
 
         Returns None if SOCKS5 is disabled.
 
@@ -131,7 +141,8 @@ class Socks5Provider:
             self._init()
             if not self._enabled:
                 return None
-        return f"socks5h://{self._user}:{self._pass}@{self._host}:{self._port}"
+        user = f"{self._user}-session-{session_id}" if session_id else self._user
+        return f"socks5h://{user}:{self._pass}@{self._host}:{self._port}"
 
     def playwright_proxy(self) -> dict | None:
         """
@@ -159,7 +170,7 @@ class Socks5Provider:
             "password": self._pass,
         }
 
-    async def bridge_proxy(self) -> dict | None:
+    async def bridge_proxy(self, session_id: str | None = None) -> dict | None:
         """
         Return a Playwright proxy dict pointing at a local plain-HTTP bridge that
         tunnels through Snowpad's authenticated SOCKS5 gateway.
@@ -170,6 +181,10 @@ class Socks5Provider:
         (proxy/socks5_bridge.py) on first use and hands back a no-auth
         HTTP proxy dict — the bridge does the SOCKS5 auth on Playwright's behalf.
 
+        Pass session_id to pin the same exit IP for ~10 minutes (Snowpad sticky
+        session via `-session-<id>` username suffix) — each distinct session_id
+        gets its own bridge instance/port since the credential differs.
+
         Returns None if SOCKS5 is disabled.
         """
         with self._lock:
@@ -178,17 +193,20 @@ class Socks5Provider:
                 return None
             user, password, host, port = self._user, self._pass, self._host, self._port
 
-        if self._bridge is None:
+        if session_id:
+            user = f"{user}-session-{session_id}"
+
+        if session_id not in self._bridges:
             async with self._bridge_start_lock:
-                if self._bridge is None:
+                if session_id not in self._bridges:
                     bridge = Socks5HttpBridge(host, port, user, password)
                     await bridge.start()
-                    self._bridge = bridge
+                    self._bridges[session_id] = bridge
 
-        return {"server": f"http://127.0.0.1:{self._bridge.port}"}
+        return {"server": f"http://127.0.0.1:{self._bridges[session_id].port}"}
 
     async def acquire_slot(self) -> None:
-        """Block until a concurrent-connection slot is free (trial plan caps this at 2)."""
+        """Block until a concurrent-connection slot is free (see SNOWPAD_MAX_CONCURRENCY)."""
         with self._lock:
             self._init()
         await self._sem.acquire()
@@ -199,8 +217,8 @@ class Socks5Provider:
 
     def report_failure(self) -> None:
         """
-        Log SOCKS5 connection failures. Unlike ProxyManager, Snowpad uses a
-        rotating gateway (single endpoint) so we can't blacklist individual IPs —
+        Log SOCKS5 connection failures. Snowpad uses a rotating gateway (single
+        endpoint) so we can't blacklist individual IPs —
         but we can warn loudly if failures accumulate, suggesting config issues.
         """
         with self._lock:
@@ -232,6 +250,7 @@ class Socks5Provider:
                 "port": self._port if self._enabled else None,
                 "user": self._user if self._enabled else None,
                 "fail_count": self._fail_count,
+                "max_concurrency": self._max_concurrency,
             }
 
 

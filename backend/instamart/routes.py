@@ -40,10 +40,8 @@ async def check_instamart_price(body: InstamartRequest, request: Request):
         browser = await request.app.state.browser_manager.acquire() if getattr(request.app.state, "browser_manager", None) else None
         if not browser:
             raise HTTPException(status_code=503, detail="Browser pool unavailable")
-        _pool = getattr(request.app.state, "instamart_proxy_pool", None)
-        _proxy = _pool.pick() if _pool else None
         async with sem_with_timeout(request.app.state.total_sem):
-            result = await scrape_one(browser, city_data, body.product_id, proxy=_proxy)
+            result = await scrape_one(browser, city_data, body.product_id)
         if cache is not None and result.get("status") not in ("error", "invalid_format"):
             cache[cache_key] = result
 
@@ -91,10 +89,8 @@ async def check_instamart_all_cities(body: InstamartAllCitiesRequest, request: R
 
         # Report under display_city (disambiguates duplicate city names).
         loc_display = {**loc, "name": display_city}
-        _pool = getattr(app_state, "instamart_proxy_pool", None)
-        _proxy = _pool.pick() if _pool else None
         async with batch_context(app_state):
-            result = await scrape_one(browser, loc_display, product_id, target_variant_name, proxy=_proxy)
+            result = await scrape_one(browser, loc_display, product_id, target_variant_name)
 
         if cache is not None and result.get("status") not in ("error", "invalid_format"):
             cache[cache_key] = result.copy()

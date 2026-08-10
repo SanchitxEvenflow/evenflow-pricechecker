@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 
 from blinkit.locations import LOCATIONS, LOCATIONS_BY_CITY, CITY_NAMES
 from blinkit.scraper import fetch_blinkit_data
+from proxy.socks5_provider import get_provider as get_snowpad_provider
 from schemas.price import BlinkitRequest, BlinkitAllCitiesRequest, BlinkitResponse
 from utils.google_sheets import GoogleSheetsClient
 from utils.scrape_helpers import batch_context, sem_with_timeout
@@ -32,28 +33,30 @@ async def check_blinkit_price(body: BlinkitRequest, request: Request):
             detail=f"Invalid city '{body.city}'. Valid cities: {CITY_NAMES}",
         )
 
-    proxy_manager = request.app.state.proxy_manager
-
     cache = getattr(request.app.state, "cache", None)
     cache_key = f"blinkit_{body.product_id}_{body.city}"
-    
+
     if cache is not None and cache_key in cache:
         result = cache[cache_key]
     else:
         loop = asyncio.get_running_loop()
+        snowpad = get_snowpad_provider()
         async with sem_with_timeout(request.app.state.total_sem):
-            result = await loop.run_in_executor(
-                request.app.state.thread_pool,
-                partial(
-                    fetch_blinkit_data,
-                    item_id=body.product_id,
-                    pincode=city_data["pincode"],
-                    lat=city_data["lat"],
-                    lon=city_data["lng"],
-                    city=body.city,
-                    proxy_manager=proxy_manager,
-                ),
-            )
+            await snowpad.acquire_slot()
+            try:
+                result = await loop.run_in_executor(
+                    request.app.state.thread_pool,
+                    partial(
+                        fetch_blinkit_data,
+                        item_id=body.product_id,
+                        pincode=city_data["pincode"],
+                        lat=city_data["lat"],
+                        lon=city_data["lng"],
+                        city=body.city,
+                    ),
+                )
+            finally:
+                snowpad.release_slot()
         if cache is not None and result.get("status") not in ("error", "invalid_format"):
             cache[cache_key] = result
 
@@ -69,8 +72,6 @@ async def check_blinkit_all_cities(body: BlinkitAllCitiesRequest, request: Reque
     Scrape Blinkit for one or more product IDs across all 10 cities.
     Results are streamed as SSE events as they complete.
     """
-    proxy_manager = request.app.state.proxy_manager
-
     # Build work items: (product_id, city_data)
     work_items = []
     for pid in body.product_ids:
@@ -93,6 +94,8 @@ async def check_blinkit_all_cities(body: BlinkitAllCitiesRequest, request: Reque
 
         async with batch_context(request.app.state):
             loop = asyncio.get_running_loop()
+            snowpad = get_snowpad_provider()
+            await snowpad.acquire_slot()
             try:
                 result = await loop.run_in_executor(
                     request.app.state.thread_pool,
@@ -103,12 +106,13 @@ async def check_blinkit_all_cities(body: BlinkitAllCitiesRequest, request: Reque
                         lat=loc["lat"],
                         lon=loc["lng"],
                         city=loc["name"],
-                        proxy_manager=proxy_manager,
                     ),
                 )
             except Exception:
                 logger.exception("blinkit worker error for %s %s", product_id, loc["name"])
                 return {"product_id": product_id, "city": loc["name"], "status": "error"}
+            finally:
+                snowpad.release_slot()
 
             if not result.get("title") and fallback_title:
                 result["title"] = fallback_title

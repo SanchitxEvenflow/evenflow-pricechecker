@@ -34,9 +34,8 @@ async def check_flipkart_price(body: FlipkartRequest, request: Request):
     if cache is not None and cache_key in cache:
         result = cache[cache_key]
     else:
-        proxy_manager = request.app.state.proxy_manager
         async with sem_with_timeout(request.app.state.total_sem):
-            result = await scrape_flipkart(body.fsn, await get_browser(request.app.state), proxy_manager)
+            result = await scrape_flipkart(body.fsn, await get_browser(request.app.state))
             
         if cache is not None and result.get("status") not in ("error", "invalid_format"):
             cache[cache_key] = result
@@ -65,8 +64,6 @@ class ManualFSNScrapeRequest(BaseModel):
 @manual_router.post("/scrape-manual")
 async def scrape_manual_flipkart(body: ManualFSNScrapeRequest, request: Request):
     """Scrape a list of FSNs manually. Results are streamed via SSE — no sheet writes."""
-    proxy_manager = request.app.state.proxy_manager
-
     if not request.app.state.playwright_ready:
         raise HTTPException(status_code=503, detail="Playwright browser not available")
 
@@ -95,7 +92,7 @@ async def scrape_manual_flipkart(body: ManualFSNScrapeRequest, request: Request)
             result = cache[cache_key].copy()
         else:
             async with batch_context(app_state):
-                result = await scrape_flipkart(fsn, await get_browser(app_state), proxy_manager)
+                result = await scrape_flipkart(fsn, await get_browser(app_state))
                 
             if cache is not None and result.get("status") not in ("error", "invalid_format"):
                 cache[cache_key] = result.copy()

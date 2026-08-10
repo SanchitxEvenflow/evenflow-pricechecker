@@ -25,7 +25,10 @@ residential proxy on the browser context is the next lever.
 
 import logging
 import re
+import uuid
 from datetime import datetime, timezone, timedelta
+
+from proxy.socks5_provider import get_provider as get_snowpad_provider
 
 logger = logging.getLogger(__name__)
 
@@ -65,13 +68,17 @@ def _to_float(s: str | None) -> float | None:
     return float(m.group(0).replace(",", "")) if m else None
 
 
-async def open_city_page(browser, loc: dict, proxy: dict | None = None):
+async def open_city_page(browser, loc: dict, session_id: str | None = None):
     """
     Create a WAF-passing, location-set (context, page) for one city.
     Reuse the returned page across many scrape_item() calls, then close_ctx().
-    `proxy` is a Playwright proxy dict (sticky IP) or None for direct.
+    `session_id` pins a sticky Snowpad exit IP (~10 min TTL) for this context —
+    the AWS WAF binds its JS-challenge token to the solving IP, so every attempt
+    (initial open + each recycle) needs its own session_id for a fresh IP.
     Returns (context, page). Raises on hard failure.
     """
+    snowpad = get_snowpad_provider()
+    proxy = await snowpad.bridge_proxy(session_id=session_id) if snowpad.enabled else None
     ctx_opts = dict(
         user_agent=_UA,
         locale="en-IN",
@@ -220,29 +227,33 @@ async def scrape_item(page, item_id: str, city: str, target_variant_name: str | 
     return result(title=title, price=price, mrp=mrp if mrp is not None else price, status="available", is_sold_out=False)
 
 
-async def scrape_one(browser, loc: dict, item_id: str, target_variant_name: str | None = None,
-                     proxy: dict | None = None) -> dict:
+async def scrape_one(browser, loc: dict, item_id: str, target_variant_name: str | None = None) -> dict:
     """One item in one city with a throwaway context. For interactive/single lookups."""
-    ctx, page = await open_city_page(browser, loc, proxy=proxy)
+    snowpad = get_snowpad_provider()
+    await snowpad.acquire_slot()
     try:
-        return await scrape_item(page, item_id, loc["name"], target_variant_name)
+        ctx, page = await open_city_page(browser, loc, session_id=uuid.uuid4().hex[:8])
+        try:
+            return await scrape_item(page, item_id, loc["name"], target_variant_name)
+        finally:
+            await close_ctx(ctx)
     finally:
-        await close_ctx(ctx)
+        snowpad.release_slot()
 
 
-async def sweep_city(browser, loc: dict, item_ids, on_result=None, recycle_after_failures: int = 3,
-                     proxy_pool=None) -> dict:
+async def sweep_city(browser, loc: dict, item_ids, on_result=None, recycle_after_failures: int = 3) -> dict:
     """
     Scrape every item_id for one city on a single reused context.
 
-    Recycles the context (close + reopen, re-set location) after `recycle_after_failures`
-    consecutive errors — Swiggy's soft-block tends to stick to a flagged context, so a
-    fresh one recovers throughput. `on_result(pid, result)` is called per item if given
-    (for live progress). Returns {pid: result}.
+    Recycles the context (close + reopen, re-set location, fresh Snowpad session) after
+    `recycle_after_failures` consecutive errors — Swiggy's soft-block tends to stick to a
+    flagged context, so a fresh one recovers throughput. `on_result(pid, result)` is called
+    per item if given (for live progress). Returns {pid: result}.
     """
-    _pick = (lambda: proxy_pool.pick()) if proxy_pool is not None else (lambda: None)
+    snowpad = get_snowpad_provider()
     results: dict[str, dict] = {}
-    ctx, page = await open_city_page(browser, loc, proxy=_pick())
+    await snowpad.acquire_slot()
+    ctx, page = await open_city_page(browser, loc, session_id=uuid.uuid4().hex[:8])
     consecutive_fail = 0
     try:
         for pid in item_ids:
@@ -254,7 +265,9 @@ async def sweep_city(browser, loc: dict, item_ids, on_result=None, recycle_after
                     logger.warning("[Instamart] %s: %d consecutive fails — recycling context (fresh IP)",
                                    loc["name"], consecutive_fail)
                     await close_ctx(ctx)
-                    ctx, page = await open_city_page(browser, loc, proxy=_pick())  # fresh sticky IP
+                    snowpad.release_slot()
+                    await snowpad.acquire_slot()
+                    ctx, page = await open_city_page(browser, loc, session_id=uuid.uuid4().hex[:8])  # fresh sticky IP
                     consecutive_fail = 0
                     r = await scrape_item(page, pid, loc["name"])  # one retry on fresh ctx
             else:
@@ -264,4 +277,5 @@ async def sweep_city(browser, loc: dict, item_ids, on_result=None, recycle_after
                 on_result(pid, r)
     finally:
         await close_ctx(ctx)
+        snowpad.release_slot()
     return results

@@ -32,6 +32,7 @@ from zepto.locations import LOCATIONS as ZEPTO_LOCATIONS
 from instamart.locations import LOCATIONS as INSTAMART_LOCATIONS
 from flipkart_minutes.locations import LOCATIONS as FLIPKART_MINUTES_LOCATIONS
 from utils import run_logger
+from proxy.socks5_provider import get_provider as get_snowpad_provider
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ async def _run_full_scrape(app, tab_prefix: str, run_type: str, write_historical
     """Core scrape logic shared by both automatic cron and manual trigger.
 
     Args:
-        app: FastAPI app instance (for browser, proxy_manager, cron_status)
+        app: FastAPI app instance (for browser, snowpad, cron_status)
         tab_prefix: Prefix for the new tab name (e.g. "Run" or "Manual_Trigger")
         run_type: "automatic" or "manual" — used for logging
         write_historical: If True, appends results to the Historical tab (cron only).
@@ -133,11 +134,9 @@ async def _run_full_scrape(app, tab_prefix: str, run_type: str, write_historical
             "error": None,
         })
 
-        proxy_manager = app.state.proxy_manager
-
         async def scrape_one(row_data: dict) -> dict:
             async with batch_context(app.state):
-                result = await scrape_amazon_with_retry(row_data["asin"], await get_browser(app.state), proxy_manager, skip_curl=True, browser_manager=app.state.browser_manager)
+                result = await scrape_amazon_with_retry(row_data["asin"], await get_browser(app.state), skip_curl=True, browser_manager=app.state.browser_manager)
                 result["row"] = row_data["row"]
             # semaphore released — curl runs here, overlapping with the next ASIN's Playwright scrape
             cookies = result.pop("_cookies", {}) or {}
@@ -344,12 +343,13 @@ async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str, write_hi
             "error": None,
         })
 
-        proxy_manager = app.state.proxy_manager
+        snowpad = get_snowpad_provider()
         sem = asyncio.Semaphore(int(os.getenv("BLINKIT_CONCURRENCY", "10")))
         loop = asyncio.get_running_loop()
 
         async def scrape_one_city(pid: str, loc: dict) -> tuple[str, dict]:
             async with sem:
+                await snowpad.acquire_slot()
                 try:
                     result = await loop.run_in_executor(
                         app.state.thread_pool,
@@ -360,11 +360,12 @@ async def _run_full_blinkit_scrape(app, tab_prefix: str, run_type: str, write_hi
                             lat=loc["lat"],
                             lon=loc["lng"],
                             city=loc["name"],
-                            proxy_manager=proxy_manager,
                         ),
                     )
                 except Exception:
                     result = {"city": loc["name"], "status": "error"}
+                finally:
+                    snowpad.release_slot()
             return (pid, result)
 
         async def scrape_pid(pid: str) -> tuple[str, dict]:
@@ -579,11 +580,12 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str, write_hist
             "error": None,
         })
 
-        proxy_manager = app.state.zepto_proxy_manager
+        snowpad = get_snowpad_provider()
         loop = asyncio.get_running_loop()
 
         async def scrape_one_city(pid: str, loc: dict, fallback_title: str | None = None, fallback_mrp: float | None = None) -> tuple[str, dict]:
             async with batch_context(app.state):
+                await snowpad.acquire_slot()
                 try:
                     result = await loop.run_in_executor(
                         app.state.thread_pool,
@@ -595,13 +597,14 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str, write_hist
                             lon=loc["lng"],
                             city=loc["name"],
                             store_id=loc["store_id"],
-                            proxy_manager=proxy_manager,
                             fallback_title=fallback_title,
                             fallback_mrp=fallback_mrp,
                         ),
                     )
                 except Exception:
                     result = {"city": loc["name"], "status": "error"}
+                finally:
+                    snowpad.release_slot()
             return (pid, result)
 
         async def scrape_pid(pid: str) -> tuple[str, dict]:
@@ -858,7 +861,6 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str, write_
         city_sem = asyncio.Semaphore(city_conc)
         cells_total = len(pids) * n_cities
         progress = {"cells": 0}
-        proxy_pool = getattr(app.state, "instamart_proxy_pool", None)
 
         def _on_cell(pid: str, r: dict) -> None:
             progress["cells"] += 1
@@ -873,8 +875,7 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str, write_
                 return
             async with city_sem:
                 try:
-                    city_results = await sweep_city(browser, loc, pids, on_result=_on_cell,
-                                                    proxy_pool=proxy_pool)
+                    city_results = await sweep_city(browser, loc, pids, on_result=_on_cell)
                 except Exception:
                     logger.exception("Instamart: city sweep failed for %s", loc["name"])
                     city_results = {}
@@ -1264,11 +1265,9 @@ async def _run_full_flipkart_scrape(app, tab_prefix: str, run_type: str, write_h
             "error": None,
         })
 
-        proxy_manager = app.state.proxy_manager
-
         async def scrape_one(row_data: dict) -> dict:
             async with batch_context(app.state):
-                result = await scrape_flipkart(row_data["fsn"], await get_browser(app.state), proxy_manager)
+                result = await scrape_flipkart(row_data["fsn"], await get_browser(app.state))
                 result["row"] = row_data["row"]
                 return result
 

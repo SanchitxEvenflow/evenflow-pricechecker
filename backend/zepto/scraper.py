@@ -1,7 +1,7 @@
 """
 zepto/scraper.py
 HTTP Client using curl_cffi for Zepto's BFF API.
-Mirrors the blinkit scraper structure: uses proxy manager, retry logic, and fallback.
+Mirrors the blinkit scraper structure: routes through Snowpad SOCKS5, retry logic.
 """
 
 import logging
@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 from curl_cffi import requests
 from curl_cffi.requests.errors import RequestsError
 
-from proxy.manager import ProxyManager
+from proxy.socks5_provider import get_provider as get_snowpad_provider
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +139,6 @@ def fetch_zepto_data(
     lon: float,
     city: str,
     store_id: str,
-    proxy_manager: ProxyManager | None = None,
     fallback_title: str | None = None,
     fallback_mrp: float | None = None,
 ) -> dict:
@@ -149,8 +148,8 @@ def fetch_zepto_data(
     Uses the v2/get_page endpoint with page_type=PDP and the product_variant_id
     query parameter, matching the real Zepto web app behaviour.
 
-    Retries up to min(5, pool_size) proxies on block/error, then falls back to
-    a direct connection.
+    Retries up to 3 times on a fresh Snowpad SOCKS5 IP on block/error. No
+    direct-connection fallback — protects the local/home IP from Zepto's WAF.
 
     This is a synchronous function (curl_cffi).
     """
@@ -184,13 +183,14 @@ def fetch_zepto_data(
     cf_worker_url = os.getenv("ZEPTO_CLOUDFLARE_WORKER_URL", "")
     has_cf_worker = bool(cf_worker_url)
 
-    pool_size = len(proxy_manager.active_pool) if proxy_manager and proxy_manager.active_pool else 0
+    snowpad = get_snowpad_provider()
+    use_snowpad = snowpad.enabled
     if has_cf_worker:
         max_attempts = 3
-    elif pool_size > 0:
-        max_attempts = min(3, pool_size)
+    elif use_snowpad:
+        max_attempts = 3
     else:
-        logger.warning("[Zepto] %s: no CF worker and no proxies available — cannot scrape", city)
+        logger.warning("[Zepto] %s: no CF worker and Snowpad disabled — cannot scrape", city)
         return _error_result("no_proxy_available")
 
     import time
@@ -198,16 +198,14 @@ def fetch_zepto_data(
     time.sleep(random.uniform(0.5, 1.5))
 
     for attempt in range(max_attempts + 1):  # +1 = direct-connection fallback (or direct worker)
-        base_proxy = None
         proxy = None
-        
+
         if has_cf_worker:
-            # When using CF Worker, we don't use Webshare proxies
+            # When using CF Worker, we don't need a Snowpad proxy
             proxy = None
         else:
-            if attempt < max_attempts and proxy_manager:
-                base_proxy = proxy_manager.get_proxy()
-                proxy = base_proxy
+            if attempt < max_attempts:
+                proxy = snowpad.curl_url()
             elif attempt == max_attempts:
                 # Prevent fallback to home IP as requested
                 logger.info("[Zepto] %s: skipping direct connection to protect local IP.", city)
@@ -262,8 +260,8 @@ def fetch_zepto_data(
 
             if response.status_code in (401, 403, 427, 429, 451):
                 logger.warning("Blocked (HTTP %d) for item_id=%s city=%s", response.status_code, item_id, city)
-                if proxy_manager and base_proxy:
-                    proxy_manager.report_failure(base_proxy)
+                if use_snowpad and not has_cf_worker:
+                    snowpad.report_failure()
                 if attempt < max_attempts:
                     if response.status_code == 429:
                         time.sleep(1.0)
@@ -272,8 +270,8 @@ def fetch_zepto_data(
 
             if response.status_code == 404:
                 logger.warning("Item %s not found/unserviceable in %s", item_id, city)
-                if proxy_manager:
-                    proxy_manager.report_success(base_proxy)
+                if use_snowpad and not has_cf_worker:
+                    snowpad.report_success()
                 return {
                     "product_id": item_id,
                     "city": city,
@@ -290,8 +288,8 @@ def fetch_zepto_data(
             if response.status_code != 200:
                 logger.error("Zepto returned status %d for item_id=%s city=%s", response.status_code, item_id, city)
                 logger.debug("[Zepto] %s: Response snippet: %s", city, response.text[:300])
-                if proxy_manager:
-                    proxy_manager.report_failure(base_proxy)
+                if use_snowpad and not has_cf_worker:
+                    snowpad.report_failure()
                 if attempt < max_attempts:
                     continue
                 return _error_result(f"http_{response.status_code}")
@@ -307,8 +305,8 @@ def fetch_zepto_data(
                 if fallback_title is not None:
                     # We already know the title and mrp from a previous city scrape!
                     logger.info("[Zepto] %s: not in local store, using provided fallback_title", city)
-                    if proxy_manager and base_proxy:
-                        proxy_manager.report_success(base_proxy)
+                    if use_snowpad and not has_cf_worker:
+                        snowpad.report_success()
                     return {
                         "product_id": item_id,
                         "city": city,
@@ -329,8 +327,8 @@ def fetch_zepto_data(
 
                 if json_data.get("code") == 5 or not json_data.get("pageLayout"):
                     logger.info("[Zepto] %s: fallback also returned no product data", city)
-                    if proxy_manager and base_proxy:
-                        proxy_manager.report_success(base_proxy)
+                    if use_snowpad and not has_cf_worker:
+                        snowpad.report_success()
                     return _error_result("not_in_any_store")
 
                 # Mark as out of stock since we had to fallback
@@ -344,8 +342,8 @@ def fetch_zepto_data(
             product = _extract_zepto_product(json_data)
             logger.info("[Zepto] %s: OK — %s = Rs.%s", city, product['title'], product['price'])
 
-            if proxy_manager and base_proxy:
-                proxy_manager.report_success(base_proxy)
+            if use_snowpad and not has_cf_worker:
+                snowpad.report_success()
 
             return {
                 "product_id": item_id,
@@ -361,8 +359,8 @@ def fetch_zepto_data(
 
         except (RequestsError, TimeoutError) as e:
             logger.error("[Zepto] %s: network/timeout error on attempt %d for item_id=%s: %s", city, attempt + 1, item_id, e)
-            if proxy_manager:
-                proxy_manager.report_failure(base_proxy)
+            if use_snowpad and not has_cf_worker:
+                snowpad.report_failure()
             if attempt < max_attempts:
                 continue
             return _error_result(f"network_error: {e}")
@@ -373,16 +371,16 @@ def fetch_zepto_data(
                 text = response.text.lower()
                 if "cloudflare" in text or "<html" in text:
                     logger.error("Cloudflare challenge detected -- rotate proxies")
-                    if proxy_manager:
-                        proxy_manager.report_failure(base_proxy)
+                    if use_snowpad and not has_cf_worker:
+                        snowpad.report_failure()
                     if attempt < max_attempts:
                         continue
             return _error_result(f"extraction_error: {e}")
 
         except Exception as e:
             logger.error("[Zepto] %s: unexpected error on attempt %d for item_id=%s: %s", city, attempt + 1, item_id, e)
-            if proxy_manager:
-                proxy_manager.report_failure(base_proxy)
+            if use_snowpad and not has_cf_worker:
+                snowpad.report_failure()
             if attempt < max_attempts:
                 continue
             return _error_result(f"unexpected: {e}")

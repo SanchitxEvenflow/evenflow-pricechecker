@@ -17,13 +17,12 @@ import re
 import threading
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from urllib.parse import urlparse
 
 from curl_cffi import requests as cffi
 from dotenv import load_dotenv
 from playwright.async_api import Browser
 
-from proxy.manager import ProxyManager
+from proxy.socks5_provider import get_provider as get_snowpad_provider
 from utils.headers import UA_POOL
 
 load_dotenv()
@@ -355,7 +354,7 @@ JS_EXTRACT_ALL = r"""
 
 # ── Main scraper ────────────────────────────────────────────────────────────
 
-async def scrape_flipkart(fsn: str, browser: Browser, proxy_manager: ProxyManager) -> dict:
+async def scrape_flipkart(fsn: str, browser: Browser) -> dict:
     """
     Flipkart scraper — Rome API first, Playwright fallback.
 
@@ -400,33 +399,35 @@ async def scrape_flipkart(fsn: str, browser: Browser, proxy_manager: ProxyManage
     cached_url = _get_cached_url(fsn)
     start_url = cached_url if cached_url else fsn_url
 
-    max_proxy_attempts = min(3, len(proxy_manager.active_pool) or 1)
+    snowpad = get_snowpad_provider()
+    use_snowpad = snowpad.enabled
+    proxy_sources: list[str] = ["snowpad", "snowpad", "snowpad"] if use_snowpad else []
+    proxy_sources += ["direct"]
+    last_attempt_idx = len(proxy_sources) - 1
 
-    for attempt in range(max_proxy_attempts + 1):  # +1 = direct-connection fallback
+    for attempt, source in enumerate(proxy_sources):
         context = None
+        snowpad_slot_held = False
         try:
             # ── Delay ───────────────────────────────────────────────────
             if attempt > 0:
                 delay = random.uniform(DELAY_MIN, DELAY_MAX)
                 logger.info(
-                    "Flipkart scrape attempt %d/%d for FSN %s — waiting %.1fs (using %s)",
-                    attempt + 1, max_proxy_attempts + 1, fsn, delay,
+                    "Flipkart scrape attempt %d/%d (%s) for FSN %s — waiting %.1fs (using %s)",
+                    attempt + 1, len(proxy_sources), source, fsn, delay,
                     "cached URL" if cached_url and start_url == cached_url else "FSN bridge URL",
                 )
                 await asyncio.sleep(delay)
             else:
                 logger.info(
-                    "Flipkart scrape attempt %d/%d for FSN %s (using %s)",
-                    attempt + 1, max_proxy_attempts + 1, fsn,
+                    "Flipkart scrape attempt %d/%d (%s) for FSN %s (using %s)",
+                    attempt + 1, len(proxy_sources), source, fsn,
                     "cached URL" if cached_url and start_url == cached_url else "FSN bridge URL",
                 )
 
             # ── Browser context setup ───────────────────────────────────
-            proxy = None
-            if attempt == max_proxy_attempts:
-                logger.info("All proxies exhausted — trying direct connection for FSN %s", fsn)
-            else:
-                proxy = proxy_manager.get_proxy()
+            if source == "direct":
+                logger.info("All Snowpad attempts exhausted — trying direct connection for FSN %s", fsn)
             user_agent = random.choice(UA_POOL)
 
             context_opts: dict = {
@@ -435,8 +436,10 @@ async def scrape_flipkart(fsn: str, browser: Browser, proxy_manager: ProxyManage
                 "locale": "en-IN",
                 "timezone_id": "Asia/Kolkata",
             }
-            if proxy:
-                context_opts["proxy"] = _parse_proxy(proxy)
+            if source == "snowpad":
+                await snowpad.acquire_slot()
+                snowpad_slot_held = True
+                context_opts["proxy"] = await snowpad.bridge_proxy()
 
             context = await browser.new_context(**context_opts)
             await context.add_init_script(STEALTH_SCRIPT)
@@ -475,8 +478,9 @@ async def scrape_flipkart(fsn: str, browser: Browser, proxy_manager: ProxyManage
 
             # Check: overloaded
             if "site is overloaded" in body_lower:
-                proxy_manager.report_failure(proxy)
-                if attempt < max_proxy_attempts:
+                if source == "snowpad":
+                    snowpad.report_failure()
+                if attempt < last_attempt_idx:
                     logger.warning("Flipkart overloaded for FSN %s — retrying in 10s", fsn)
                     await _safe_close_context(context)
                     context = None
@@ -486,8 +490,9 @@ async def scrape_flipkart(fsn: str, browser: Browser, proxy_manager: ProxyManage
 
             # Check: blocked / captcha
             if "access denied" in body_lower or "captcha" in body_lower:
-                proxy_manager.report_failure(proxy)
-                if attempt < max_proxy_attempts:
+                if source == "snowpad":
+                    snowpad.report_failure()
+                if attempt < last_attempt_idx:
                     logger.warning("Flipkart blocked for FSN %s — retrying in 10s", fsn)
                     await _safe_close_context(context)
                     context = None
@@ -497,7 +502,8 @@ async def scrape_flipkart(fsn: str, browser: Browser, proxy_manager: ProxyManage
 
             # Check: not found / 404
             if "page not found" in body_lower or "this item is no longer available" in body_lower:
-                proxy_manager.report_success(proxy)
+                if source == "snowpad":
+                    snowpad.report_success()
                 return _error_result(fsn, resolved_url, "not_found")
 
             # ── Debug: save screenshot & HTML ───────────────────────────
@@ -529,12 +535,14 @@ async def scrape_flipkart(fsn: str, browser: Browser, proxy_manager: ProxyManage
 
             # ── Determine status ────────────────────────────────────────
             if not price:
-                proxy_manager.report_success(proxy)
+                if source == "snowpad":
+                    snowpad.report_success()
                 _cache_url(fsn, resolved_url)
                 return _error_result(fsn, resolved_url, "unavailable")
 
             # ── Cache & return ──────────────────────────────────────────
-            proxy_manager.report_success(proxy)
+            if source == "snowpad":
+                snowpad.report_success()
             _cache_url(fsn, resolved_url)
 
             logger.info(
@@ -557,7 +565,7 @@ async def scrape_flipkart(fsn: str, browser: Browser, proxy_manager: ProxyManage
 
         except Exception as e:
             logger.exception("Flipkart scrape error for FSN %s (attempt %d): %s", fsn, attempt + 1, str(e))
-            if attempt < max_proxy_attempts:
+            if attempt < last_attempt_idx:
                 await _safe_close_context(context)
                 context = None
                 if cached_url:
@@ -578,6 +586,8 @@ async def scrape_flipkart(fsn: str, browser: Browser, proxy_manager: ProxyManage
             }
 
         finally:
+            if snowpad_slot_held:
+                snowpad.release_slot()
             await _safe_close_context(context)
 
     return {
@@ -674,12 +684,3 @@ async def _safe_close_context(context) -> None:
             pass
 
 
-def _parse_proxy(proxy_url: str) -> dict:
-    """Parse proxy URL into Playwright's proxy format dict."""
-    parsed = urlparse(proxy_url)
-    result: dict = {"server": f"{parsed.scheme}://{parsed.hostname}:{parsed.port}"}
-    if parsed.username:
-        result["username"] = parsed.username
-    if parsed.password:
-        result["password"] = parsed.password
-    return result
