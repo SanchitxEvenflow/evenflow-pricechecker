@@ -27,7 +27,6 @@ from amazon.scraper import scrape_amazon_with_retry, fetch_curl_supplement, merg
 from flipkart.scraper import scrape_flipkart
 from blinkit.scraper import fetch_blinkit_data
 from blinkit.locations import LOCATIONS as BLINKIT_LOCATIONS
-from zepto.scraper import fetch_zepto_data
 from zepto.locations import LOCATIONS as ZEPTO_LOCATIONS
 from instamart.locations import LOCATIONS as INSTAMART_LOCATIONS
 from flipkart_minutes.locations import LOCATIONS as FLIPKART_MINUTES_LOCATIONS
@@ -580,67 +579,18 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str, write_hist
             "error": None,
         })
 
-        snowpad = get_snowpad_provider()
-        loop = asyncio.get_running_loop()
+        # Zepto's BFF is behind an AWS WAF JS challenge that no curl/proxy can pass
+        # (see zepto/scraper.py docstring). Scrape with a real browser instead:
+        # one reused context per city (location set via GPS spoof), sweeping all
+        # PIDs, then closed. Mirrors instamart's cron scrape.
+        from zepto.browser_scraper import sweep_city
 
-        async def scrape_one_city(pid: str, loc: dict, fallback_title: str | None = None, fallback_mrp: float | None = None) -> tuple[str, dict]:
-            async with batch_context(app.state):
-                await snowpad.acquire_slot()
-                try:
-                    result = await loop.run_in_executor(
-                        app.state.thread_pool,
-                        partial(
-                            fetch_zepto_data,
-                            item_id=pid,
-                            pincode=loc["pincode"],
-                            lat=loc["lat"],
-                            lon=loc["lng"],
-                            city=loc["name"],
-                            store_id=loc["store_id"],
-                            fallback_title=fallback_title,
-                            fallback_mrp=fallback_mrp,
-                        ),
-                    )
-                except Exception:
-                    result = {"city": loc["name"], "status": "error"}
-                finally:
-                    snowpad.release_slot()
-            return (pid, result)
-
-        async def scrape_pid(pid: str) -> tuple[str, dict]:
-            """Scrape all cities for one PID, returning aggregated city results."""
-            city_results: dict[str, dict] = {}
-            if not ZEPTO_LOCATIONS:
-                return (pid, city_results)
-                
-            first_loc = ZEPTO_LOCATIONS[0]
-            _, result1 = await scrape_one_city(pid, first_loc)
-            city_results[first_loc["name"]] = result1
-            
-            fallback_title = result1.get("title")
-            fallback_mrp = result1.get("mrp")
-            if fallback_title in ("Not Found", "Unknown Product"):
-                fallback_title = None
-                 
-            city_tasks = [asyncio.create_task(scrape_one_city(pid, loc, fallback_title, fallback_mrp)) for loc in ZEPTO_LOCATIONS[1:]]
-            try:
-                for coro in asyncio.as_completed(city_tasks):
-                    try:
-                        _, result = await coro
-                    except Exception:
-                        logger.exception("Zepto: city task error for pid=%s", pid)
-                        continue
-                    city = result.get("city", "")
-                    if city:
-                        city_results[city] = result
-                    else:
-                        logger.warning("Zepto: result missing city field for pid=%s", pid)
-            finally:
-                for t in city_tasks:
-                    if not t.done():
-                        t.cancel()
-                await asyncio.gather(*city_tasks, return_exceptions=True)
-            return (pid, city_results)
+        browser_manager = getattr(app.state, "browser_manager", None)
+        if browser_manager is None or not getattr(browser_manager, "browsers", None):
+            logger.error("Zepto: no Playwright browser pool — cannot scrape")
+            app.state.zepto_cron_status["error"] = "browser pool unavailable"
+            run_logger.fail_log(run_id, "browser pool unavailable")
+            return
 
         total_done = 0
         total_success = 0
@@ -650,90 +600,86 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str, write_hist
         BATCH_SIZE = 100
 
         pid_index: dict[str, int] = {pid: i for i, pid in enumerate(pids)}
+        n_cities = max(1, len(ZEPTO_LOCATIONS))
+        matrix: dict[str, dict[str, dict]] = {pid: {} for pid in pids}
 
-        # Bounded PID workers: max in-flight tasks = n_pid_workers × 9, not len(pids) × 9.
-        n_pid_workers = min(len(pids), max(1, SCRAPE_CONCURRENCY))
-        work_queue: asyncio.Queue = asyncio.Queue()
-        for pid in pids:
-            work_queue.put_nowait(pid)
-        results_queue: asyncio.Queue = asyncio.Queue()
+        city_conc = max(1, min(n_cities, int(os.getenv("ZEPTO_CITY_CONCURRENCY", "3"))))
+        city_sem = asyncio.Semaphore(city_conc)
+        progress = {"cells": 0}
 
-        async def _pid_worker():
-            while True:
-                try:
-                    pid = work_queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    break
-                try:
-                    result = await scrape_pid(pid)
-                except Exception:
-                    logger.exception("Zepto: pid worker error for pid=%s", pid)
-                    result = (pid, {})
-                await results_queue.put(result)
+        def _on_cell(pid: str, r: dict) -> None:
+            progress["cells"] += 1
+            app.state.zepto_cron_status["progress"] = progress["cells"] // n_cities
 
-        pid_worker_tasks: list[asyncio.Task] = []
-
-        try:
-            pid_worker_tasks = [asyncio.create_task(_pid_worker()) for _ in range(n_pid_workers)]
-
-            for _ in range(len(pids)):
-                pid, city_results = await results_queue.get()
-
-                for r in city_results.values():
-                    if r.get("status", "error") == "error":
-                        total_failed += 1
-                    else:
-                        total_success += 1
-
-                i = pid_index[pid]
-                total_done += 1
-                app.state.zepto_cron_status["progress"] = total_done
-                run_logger.update_progress(run_id, total_success, total_failed)
-
-                row_values = format_zepto_row(city_results)
-                batch_updates.append({
-                    "row": i + 2,
-                    "values": row_values,
-                })
-                historical_rows.append([pid] + row_values + [new_tab])
-
-                should_flush = (len(batch_updates) == BATCH_SIZE) or (total_done == len(pids))
-                if should_flush:
-                    try:
-                        await sheets_client.async_batch_update_zepto_rows(sheet_id, new_tab, batch_updates)
-                        logger.info("Zepto: wrote batch of %d rows (%d/%d total)",
-                                   len(batch_updates), total_done, len(pids))
-                        batch_updates = []
-                    except Exception:
-                        logger.exception("Zepto: failed to write batch")
-                        batch_updates = []
-        finally:
-            for t in pid_worker_tasks:
-                if not t.done():
-                    t.cancel()
-            await asyncio.gather(*pid_worker_tasks, return_exceptions=True)
+        async def _sweep(loc: dict) -> None:
             try:
-                if batch_updates:
-                    try:
-                        await sheets_client.async_batch_update_zepto_rows(sheet_id, new_tab, batch_updates)
-                        logger.info("Zepto: flushed final %d rows on shutdown", len(batch_updates))
-                    except (Exception, asyncio.CancelledError):
-                        logger.exception("Zepto: final flush failed on shutdown")
-                hist_tab = os.getenv("ZEPTO_HISTORICAL_TAB", "HISTORY")
-                if write_historical and historical_rows:
-                    try:
-                        loop = asyncio.get_running_loop()
-                        existing = await loop.run_in_executor(None, sheets_client.list_tabs, sheet_id)
-                        if hist_tab not in existing:
-                            await loop.run_in_executor(None, sheets_client.create_tab, sheet_id, hist_tab)
-                        await sheets_client.async_append_to_historical(sheet_id, hist_tab, historical_rows)
-                        logger.info("Zepto: appended %d rows to '%s'", len(historical_rows), hist_tab)
-                    except (Exception, asyncio.CancelledError):
-                        logger.exception("Zepto: failed to append to historical tab '%s'", hist_tab)
-                elif not write_historical:
-                    logger.info("Zepto: skipping historical append (manual trigger)")
-            finally:
-                run_logger.complete_log(run_id, total_success, total_failed, new_tab)
+                browser = await browser_manager.acquire()
+            except RuntimeError:
+                logger.error("Zepto: no browser available for city %s", loc["name"])
+                return
+            async with city_sem:
+                try:
+                    city_results = await sweep_city(browser, loc, pids, on_result=_on_cell)
+                except Exception:
+                    logger.exception("Zepto: city sweep failed for %s", loc["name"])
+                    city_results = {}
+            for pid, r in city_results.items():
+                matrix.setdefault(pid, {})[loc["name"]] = r
+
+        logger.info("Zepto: sweeping %d cities × %d PIDs (%d contexts at a time)",
+                    n_cities, len(pids), city_conc)
+        await asyncio.gather(*[asyncio.create_task(_sweep(loc)) for loc in ZEPTO_LOCATIONS])
+
+        # Build rows pid-major from the matrix and flush in batches.
+        for pid in pids:
+            city_results = matrix.get(pid, {})
+            for r in city_results.values():
+                if r.get("status", "error") == "error":
+                    total_failed += 1
+                else:
+                    total_success += 1
+
+            i = pid_index[pid]
+            total_done += 1
+            app.state.zepto_cron_status["progress"] = total_done
+            run_logger.update_progress(run_id, total_success, total_failed)
+
+            row_values = format_zepto_row(city_results)
+            batch_updates.append({"row": i + 2, "values": row_values})
+            historical_rows.append([pid] + row_values + [new_tab])
+
+            should_flush = (len(batch_updates) == BATCH_SIZE) or (total_done == len(pids))
+            if should_flush:
+                try:
+                    await sheets_client.async_batch_update_zepto_rows(sheet_id, new_tab, batch_updates)
+                    logger.info("Zepto: wrote batch of %d rows (%d/%d total)",
+                               len(batch_updates), total_done, len(pids))
+                    batch_updates = []
+                except Exception:
+                    logger.exception("Zepto: failed to write batch")
+                    batch_updates = []
+        try:
+            if batch_updates:
+                try:
+                    await sheets_client.async_batch_update_zepto_rows(sheet_id, new_tab, batch_updates)
+                    logger.info("Zepto: flushed final %d rows on shutdown", len(batch_updates))
+                except (Exception, asyncio.CancelledError):
+                    logger.exception("Zepto: final flush failed on shutdown")
+            hist_tab = os.getenv("ZEPTO_HISTORICAL_TAB", "HISTORY")
+            if write_historical and historical_rows:
+                try:
+                    loop = asyncio.get_running_loop()
+                    existing = await loop.run_in_executor(None, sheets_client.list_tabs, sheet_id)
+                    if hist_tab not in existing:
+                        await loop.run_in_executor(None, sheets_client.create_tab, sheet_id, hist_tab)
+                    await sheets_client.async_append_to_historical(sheet_id, hist_tab, historical_rows)
+                    logger.info("Zepto: appended %d rows to '%s'", len(historical_rows), hist_tab)
+                except (Exception, asyncio.CancelledError):
+                    logger.exception("Zepto: failed to append to historical tab '%s'", hist_tab)
+            elif not write_historical:
+                logger.info("Zepto: skipping historical append (manual trigger)")
+        finally:
+            run_logger.complete_log(run_id, total_success, total_failed, new_tab)
 
         elapsed = datetime.now(IST) - run_start
         minutes, seconds = divmod(int(elapsed.total_seconds()), 60)

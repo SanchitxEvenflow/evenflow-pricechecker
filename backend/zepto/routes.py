@@ -4,14 +4,12 @@ import asyncio
 import json
 import logging
 import os
-from functools import partial
 
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse
 
 from zepto.locations import LOCATIONS, LOCATIONS_BY_CITY, CITY_NAMES
-from zepto.scraper import fetch_zepto_data
-from proxy.socks5_provider import get_provider as get_snowpad_provider
+from zepto.browser_scraper import scrape_one
 from schemas.price import ZeptoRequest, ZeptoAllCitiesRequest, ZeptoResponse
 from utils.google_sheets import GoogleSheetsClient
 from utils.scrape_helpers import batch_context, sem_with_timeout
@@ -39,25 +37,11 @@ async def check_zepto_price(body: ZeptoRequest, request: Request):
     if cache is not None and cache_key in cache:
         result = cache[cache_key]
     else:
-        loop = asyncio.get_running_loop()
-        snowpad = get_snowpad_provider()
+        browser = await request.app.state.browser_manager.acquire() if getattr(request.app.state, "browser_manager", None) else None
+        if not browser:
+            raise HTTPException(status_code=503, detail="Browser pool unavailable")
         async with sem_with_timeout(request.app.state.total_sem):
-            await snowpad.acquire_slot()
-            try:
-                result = await loop.run_in_executor(
-                    request.app.state.thread_pool,
-                    partial(
-                        fetch_zepto_data,
-                        item_id=body.product_id,
-                        pincode=city_data["pincode"],
-                        lat=city_data["lat"],
-                        lon=city_data["lng"],
-                        city=body.city,
-                        store_id=city_data["store_id"],
-                    ),
-                )
-            finally:
-                snowpad.release_slot()
+            result = await scrape_one(browser, city_data, body.product_id)
         if cache is not None and result.get("status") not in ("error", "invalid_format"):
             cache[cache_key] = result
 
@@ -86,81 +70,43 @@ async def check_zepto_all_cities(body: ZeptoAllCitiesRequest, request: Request):
             yield f"data: {json.dumps({'done': True, 'total': 0})}\n\n"
         return StreamingResponse(empty_stream(), media_type="text/event-stream")
 
-    async def worker(product_id: str, loc: dict, fallback_title: str | None = None, fallback_mrp: float | None = None) -> dict:
+    async def worker(product_id: str, loc: dict) -> dict:
         cache = getattr(request.app.state, "cache", None)
         cache_key = f"zepto_{product_id}_{loc['name']}"
 
         if cache is not None and cache_key in cache:
             return cache[cache_key].copy()
 
+        browser = await request.app.state.browser_manager.acquire() if getattr(request.app.state, "browser_manager", None) else None
+        if not browser:
+            return {"product_id": product_id, "city": loc["name"], "status": "error",
+                    "error_message": "browser pool unavailable", "price": None, "mrp": None,
+                    "title": None, "is_sold_out": False, "url": None, "checked_at": None}
+
         async with batch_context(request.app.state):
-            loop = asyncio.get_running_loop()
-            snowpad = get_snowpad_provider()
-            await snowpad.acquire_slot()
-            try:
-                result = await loop.run_in_executor(
-                    request.app.state.thread_pool,
-                    partial(
-                        fetch_zepto_data,
-                        item_id=product_id,
-                        pincode=loc["pincode"],
-                        lat=loc["lat"],
-                        lon=loc["lng"],
-                        city=loc["name"],
-                        store_id=loc["store_id"],
-                        fallback_title=fallback_title,
-                        fallback_mrp=fallback_mrp,
-                    ),
-                )
-            except Exception:
-                logger.exception("zepto worker error for %s %s", product_id, loc["name"])
-                return {"product_id": product_id, "city": loc["name"], "status": "error"}
-            finally:
-                snowpad.release_slot()
+            result = await scrape_one(browser, loc, product_id)
 
-            if cache is not None and result.get("status") not in ("error", "invalid_format"):
-                cache[cache_key] = result.copy()
+        if cache is not None and result.get("status") not in ("error", "invalid_format"):
+            cache[cache_key] = result.copy()
 
-            return result
+        return result
 
     async def event_stream():
         done = 0
-        precheck_tasks = []
-        remaining_tasks = []
+        tasks = [
+            asyncio.create_task(worker(pid.strip(), loc))
+            for pid in body.product_ids
+            for loc in LOCATIONS
+        ]
         try:
-            # 1. First-city pre-check: Scrape LOCATIONS[0] for all PIDs concurrently
-            for pid in body.product_ids:
-                if LOCATIONS:
-                    precheck_tasks.append(asyncio.create_task(worker(pid.strip(), LOCATIONS[0])))
-                    
-            # Wait for all prechecks and store their titles
-            first_city_results = {}
-            for coro in asyncio.as_completed(precheck_tasks):
-                result = await coro
-                pid = result["product_id"]
-                first_city_results[pid] = result
-                done += 1
-                yield f"data: {json.dumps({**result, 'progress': done, 'total': total})}\n\n"
-
-            # 2. Scrape remaining cities, injecting fallback title/mrp if available
-            for pid in body.product_ids:
-                pid = pid.strip()
-                fallback_title = first_city_results.get(pid, {}).get("title")
-                fallback_mrp = first_city_results.get(pid, {}).get("mrp")
-                if fallback_title == "Not Found" or fallback_title == "Unknown Product":
-                    fallback_title = None
-
-                for loc in LOCATIONS[1:]:
-                    remaining_tasks.append(asyncio.create_task(worker(pid, loc, fallback_title, fallback_mrp)))
-
-            for coro in asyncio.as_completed(remaining_tasks):
+            for coro in asyncio.as_completed(tasks):
                 result = await coro
                 done += 1
                 yield f"data: {json.dumps({**result, 'progress': done, 'total': total})}\n\n"
 
             yield f"data: {json.dumps({'done': True, 'total': total})}\n\n"
         finally:
-            for task in precheck_tasks + remaining_tasks:
+            for task in tasks:
                 if not task.done():
                     task.cancel()
 
