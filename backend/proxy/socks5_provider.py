@@ -65,6 +65,12 @@ class Socks5Provider:
         # Trial plan caps concurrent connections (2) — a shared semaphore keeps every
         # caller (Amazon, Instamart, ...) under that ceiling instead of each one guessing.
         self._sem: asyncio.Semaphore | None = None
+        # Separate semaphore gating actual raw SOCKS5 tunnels (see socks5_bridge.py).
+        # Must NOT be the same object as _sem: _sem is held for a whole scrape flow
+        # (browser context open -> extraction), while a single page load fires many
+        # parallel subresource connections through the bridge — reusing _sem here
+        # would deadlock once 2 flows are concurrently holding both flow-level slots.
+        self._conn_sem: asyncio.Semaphore | None = None
         # Chromium can't use an authenticated SOCKS5 proxy directly, so Playwright
         # callers go through a local in-process HTTP bridge instead (see bridge_proxy()).
         # Keyed by session_id (None = default rotating bridge) so sticky-session
@@ -94,6 +100,7 @@ class Socks5Provider:
             max_concurrency = 2
         self._max_concurrency = max_concurrency
         self._sem = asyncio.Semaphore(max_concurrency)
+        self._conn_sem = asyncio.Semaphore(max_concurrency)
 
         if self._enabled and (not self._user or not self._pass):
             logger.warning(
@@ -199,7 +206,7 @@ class Socks5Provider:
         if session_id not in self._bridges:
             async with self._bridge_start_lock:
                 if session_id not in self._bridges:
-                    bridge = Socks5HttpBridge(host, port, user, password)
+                    bridge = Socks5HttpBridge(host, port, user, password, self._conn_sem)
                     await bridge.start()
                     self._bridges[session_id] = bridge
 

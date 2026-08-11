@@ -111,11 +111,17 @@ async def _pipe(src: asyncio.StreamReader, dst: asyncio.StreamWriter) -> None:
 class Socks5HttpBridge:
     """Local plain-HTTP CONNECT proxy tunneling through an authenticated upstream SOCKS5 server."""
 
-    def __init__(self, upstream_host: str, upstream_port: int, user: str, password: str):
+    def __init__(self, upstream_host: str, upstream_port: int, user: str, password: str,
+                 conn_sem: asyncio.Semaphore):
         self._upstream_host = upstream_host
         self._upstream_port = upstream_port
         self._user = user
         self._password = password
+        # Snowpad's real cap is on concurrent raw connections, not scrape "flows" — a
+        # single page load fires many parallel subresource requests (JS/CSS/XHR/CDN),
+        # each dialing its own tunnel here. Gate the actual dials, shared across every
+        # bridge instance (all session_ids), or the flow-level slot upstream is a no-op.
+        self._conn_sem = conn_sem
         self._server: asyncio.AbstractServer | None = None
         self.port: int | None = None
 
@@ -138,25 +144,26 @@ class Socks5HttpBridge:
             target_host, _, target_port = target.partition(":")
             target_port_i = int(target_port or 443)
 
-            try:
-                remote_reader, remote_writer = await _socks5_connect(
-                    self._upstream_host, self._upstream_port, self._user, self._password,
-                    target_host, target_port_i,
-                )
-            except Exception as e:
-                logger.warning("[Socks5HttpBridge] upstream SOCKS5 connect to %s:%d failed: %s",
-                                target_host, target_port_i, e)
-                client_writer.write(f"HTTP/1.1 502 Bad Gateway\r\n\r\n{e}".encode())
+            async with self._conn_sem:
+                try:
+                    remote_reader, remote_writer = await _socks5_connect(
+                        self._upstream_host, self._upstream_port, self._user, self._password,
+                        target_host, target_port_i,
+                    )
+                except Exception as e:
+                    logger.warning("[Socks5HttpBridge] upstream SOCKS5 connect to %s:%d failed: %s",
+                                    target_host, target_port_i, e)
+                    client_writer.write(f"HTTP/1.1 502 Bad Gateway\r\n\r\n{e}".encode())
+                    await client_writer.drain()
+                    return
+
+                client_writer.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
                 await client_writer.drain()
-                return
 
-            client_writer.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
-            await client_writer.drain()
-
-            await asyncio.gather(
-                _pipe(client_reader, remote_writer),
-                _pipe(remote_reader, client_writer),
-            )
+                await asyncio.gather(
+                    _pipe(client_reader, remote_writer),
+                    _pipe(remote_reader, client_writer),
+                )
         except Exception:
             logger.debug("[Socks5HttpBridge] client handler error", exc_info=True)
         finally:
