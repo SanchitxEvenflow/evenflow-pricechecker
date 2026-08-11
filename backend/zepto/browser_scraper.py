@@ -143,7 +143,7 @@ async def open_city_page(browser, loc: dict, session_id: str | None = None):
 
     await _goto_ok(page, _HOME_URL)
     try:
-        await page.locator('[data-testid="user-address"]').click(timeout=6000)
+        await page.locator('[data-testid="user-address"]').click(timeout=15000)
         cur_loc = page.locator('[data-testid="current-location-section"]')
         if await cur_loc.count() > 0:
             await cur_loc.click(timeout=6000)
