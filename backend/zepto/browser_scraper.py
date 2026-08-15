@@ -45,7 +45,13 @@ _UA = (
 _BLOCK_TYPES = {"image", "font", "media"}
 
 _HOME_URL = "https://www.zepto.com/"
-_ITEM_URL = "https://www.zepto.com/pn/product/pvid/{item_id}"
+# Slug segment must NOT be the literal word "product" — Zepto's WAF has a
+# separate, much stricter rate rule keyed on exactly that generic placeholder
+# (every naive scraper's URL shape). Real slug text, or even a single dummy
+# character, resolves the challenge normally; "product" gets a hard 429 even
+# on the WAF's own auto-retry after solving the JS challenge. Confirmed via
+# side-by-side testing 2026-08-15 (same session, same IP, only slug changed).
+_ITEM_URL = "https://www.zepto.com/pn/x/pvid/{item_id}"
 
 
 async def _block_heavy(route):
@@ -144,10 +150,11 @@ async def open_city_page(browser, loc: dict, session_id: str | None = None):
     await _goto_ok(page, _HOME_URL)
     try:
         await page.locator('[data-testid="user-address"]').click(timeout=15000)
-        cur_loc = page.locator('[data-testid="current-location-section"]')
-        if await cur_loc.count() > 0:
-            await cur_loc.click(timeout=6000)
-            await page.wait_for_timeout(3500)  # let store resolve from coords
+        # current-location-section renders ~1s after the address modal opens
+        # (async re-render) — count() right after click always reads 0. click()
+        # auto-waits for it to attach instead of racing a synchronous count().
+        await page.locator('[data-testid="current-location-section"]').click(timeout=15000)
+        await page.wait_for_timeout(3500)  # let store resolve from coords
     except Exception as e:
         logger.warning("[Zepto] %s: location-set flow failed: %s", loc.get("name"), e)
     return ctx, page
@@ -231,11 +238,13 @@ async def scrape_one(browser, loc: dict, item_id: str) -> dict:
     snowpad = get_snowpad_provider()
     await snowpad.acquire_slot()
     try:
-        ctx, page = await open_city_page(browser, loc, session_id=uuid.uuid4().hex[:8])
+        session_id = uuid.uuid4().hex[:8]
+        ctx, page = await open_city_page(browser, loc, session_id=session_id)
         try:
             return await scrape_item(page, item_id, loc["name"])
         finally:
             await close_ctx(ctx)
+            await snowpad.close_bridge(session_id)
     finally:
         snowpad.release_slot()
 
@@ -249,7 +258,8 @@ async def sweep_city(browser, loc: dict, item_ids, on_result=None, recycle_after
     snowpad = get_snowpad_provider()
     results: dict[str, dict] = {}
     await snowpad.acquire_slot()
-    ctx, page = await open_city_page(browser, loc, session_id=uuid.uuid4().hex[:8])
+    session_id = uuid.uuid4().hex[:8]
+    ctx, page = await open_city_page(browser, loc, session_id=session_id)
     consecutive_fail = 0
     try:
         for n, pid in enumerate(item_ids):
@@ -266,9 +276,11 @@ async def sweep_city(browser, loc: dict, item_ids, on_result=None, recycle_after
                     logger.warning("[Zepto] %s: %d consecutive fails — recycling context (fresh IP)",
                                    loc["name"], consecutive_fail)
                     await close_ctx(ctx)
+                    await snowpad.close_bridge(session_id)
                     snowpad.release_slot()
                     await snowpad.acquire_slot()
-                    ctx, page = await open_city_page(browser, loc, session_id=uuid.uuid4().hex[:8])
+                    session_id = uuid.uuid4().hex[:8]
+                    ctx, page = await open_city_page(browser, loc, session_id=session_id)
                     consecutive_fail = 0
                     r = await scrape_item(page, pid, loc["name"])
             else:
@@ -278,5 +290,6 @@ async def sweep_city(browser, loc: dict, item_ids, on_result=None, recycle_after
                 on_result(pid, r)
     finally:
         await close_ctx(ctx)
+        await snowpad.close_bridge(session_id)
         snowpad.release_slot()
     return results

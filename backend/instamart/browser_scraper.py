@@ -232,11 +232,13 @@ async def scrape_one(browser, loc: dict, item_id: str, target_variant_name: str 
     snowpad = get_snowpad_provider()
     await snowpad.acquire_slot()
     try:
-        ctx, page = await open_city_page(browser, loc, session_id=uuid.uuid4().hex[:8])
+        session_id = uuid.uuid4().hex[:8]
+        ctx, page = await open_city_page(browser, loc, session_id=session_id)
         try:
             return await scrape_item(page, item_id, loc["name"], target_variant_name)
         finally:
             await close_ctx(ctx)
+            await snowpad.close_bridge(session_id)
     finally:
         snowpad.release_slot()
 
@@ -253,7 +255,8 @@ async def sweep_city(browser, loc: dict, item_ids, on_result=None, recycle_after
     snowpad = get_snowpad_provider()
     results: dict[str, dict] = {}
     await snowpad.acquire_slot()
-    ctx, page = await open_city_page(browser, loc, session_id=uuid.uuid4().hex[:8])
+    session_id = uuid.uuid4().hex[:8]
+    ctx, page = await open_city_page(browser, loc, session_id=session_id)
     consecutive_fail = 0
     try:
         for pid in item_ids:
@@ -265,9 +268,11 @@ async def sweep_city(browser, loc: dict, item_ids, on_result=None, recycle_after
                     logger.warning("[Instamart] %s: %d consecutive fails — recycling context (fresh IP)",
                                    loc["name"], consecutive_fail)
                     await close_ctx(ctx)
+                    await snowpad.close_bridge(session_id)
                     snowpad.release_slot()
                     await snowpad.acquire_slot()
-                    ctx, page = await open_city_page(browser, loc, session_id=uuid.uuid4().hex[:8])  # fresh sticky IP
+                    session_id = uuid.uuid4().hex[:8]
+                    ctx, page = await open_city_page(browser, loc, session_id=session_id)  # fresh sticky IP
                     consecutive_fail = 0
                     r = await scrape_item(page, pid, loc["name"])  # one retry on fresh ctx
             else:
@@ -277,5 +282,6 @@ async def sweep_city(browser, loc: dict, item_ids, on_result=None, recycle_after
                 on_result(pid, r)
     finally:
         await close_ctx(ctx)
+        await snowpad.close_bridge(session_id)
         snowpad.release_slot()
     return results

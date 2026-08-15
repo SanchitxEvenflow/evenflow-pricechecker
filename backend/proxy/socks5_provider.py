@@ -212,6 +212,18 @@ class Socks5Provider:
 
         return {"server": f"http://127.0.0.1:{self._bridges[session_id].port}"}
 
+    async def close_bridge(self, session_id: str | None) -> None:
+        """
+        Stop and drop the bridge for one session_id. Callers that mint a fresh
+        session_id per flow (Zepto's scrape_one/sweep_city) MUST call this when
+        done, else self._bridges grows unbounded — one leaked asyncio server
+        (and listening port) per scrape, forever, for the life of the process.
+        """
+        async with self._bridge_start_lock:
+            bridge = self._bridges.pop(session_id, None)
+        if bridge is not None:
+            await bridge.stop()
+
     async def acquire_slot(self) -> None:
         """Block until a concurrent-connection slot is free (see SNOWPAD_MAX_CONCURRENCY)."""
         with self._lock:
