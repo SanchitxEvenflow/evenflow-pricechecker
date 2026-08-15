@@ -9,7 +9,7 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse
 
 from zepto.locations import LOCATIONS, LOCATIONS_BY_CITY, CITY_NAMES
-from zepto.browser_scraper import scrape_one
+from zepto.browser_scraper import scrape_one, sweep_city
 from schemas.price import ZeptoRequest, ZeptoAllCitiesRequest, ZeptoResponse
 from utils.google_sheets import GoogleSheetsClient
 from utils.scrape_helpers import batch_context, sem_with_timeout
@@ -54,53 +54,63 @@ async def check_zepto_price(body: ZeptoRequest, request: Request):
 @router.post("/zepto/all-cities")
 async def check_zepto_all_cities(body: ZeptoAllCitiesRequest, request: Request):
     """
-    Scrape Zepto for one or more product IDs across all 10 cities.
+    Scrape Zepto for one or more product IDs across all cities.
+    Grouped by city (one sweep_city() call per city) so location-setup (home
+    nav + address click) is paid once per city instead of once per
+    (product, city) pair — scrape_one() per pair used to redo it every time.
     Results are streamed as SSE events as they complete.
     """
-    # Build work items: (product_id, city_data)
-    work_items = []
-    for pid in body.product_ids:
-        for loc in LOCATIONS:
-            work_items.append((pid.strip(), loc))
-
-    total = len(work_items)
+    pids = [pid.strip() for pid in body.product_ids]
+    total = len(pids) * len(LOCATIONS)
 
     if total == 0:
         async def empty_stream():
             yield f"data: {json.dumps({'done': True, 'total': 0})}\n\n"
         return StreamingResponse(empty_stream(), media_type="text/event-stream")
 
-    async def worker(product_id: str, loc: dict) -> dict:
+    async def city_worker(loc: dict, queue: asyncio.Queue) -> None:
         cache = getattr(request.app.state, "cache", None)
-        cache_key = f"zepto_{product_id}_{loc['name']}"
+        pending = []
+        for pid in pids:
+            cache_key = f"zepto_{pid}_{loc['name']}"
+            if cache is not None and cache_key in cache:
+                await queue.put(cache[cache_key].copy())
+            else:
+                pending.append(pid)
 
-        if cache is not None and cache_key in cache:
-            return cache[cache_key].copy()
+        if not pending:
+            return
 
         browser = await request.app.state.browser_manager.acquire() if getattr(request.app.state, "browser_manager", None) else None
         if not browser:
-            return {"product_id": product_id, "city": loc["name"], "status": "error",
-                    "error_message": "browser pool unavailable", "price": None, "mrp": None,
-                    "title": None, "is_sold_out": False, "url": None, "checked_at": None}
+            for pid in pending:
+                await queue.put({"product_id": pid, "city": loc["name"], "status": "error",
+                        "error_message": "browser pool unavailable", "price": None, "mrp": None,
+                        "title": None, "is_sold_out": False, "url": None, "checked_at": None})
+            return
 
-        async with batch_context(request.app.state):
-            result = await scrape_one(browser, loc, product_id)
+        def _on_result(pid: str, r: dict) -> None:
+            if cache is not None and r.get("status") not in ("error", "invalid_format"):
+                cache[f"zepto_{pid}_{loc['name']}"] = r.copy()
+            queue.put_nowait(r)
 
-        if cache is not None and result.get("status") not in ("error", "invalid_format"):
-            cache[cache_key] = result.copy()
-
-        return result
+        try:
+            async with batch_context(request.app.state):
+                await sweep_city(browser, loc, pending, on_result=_on_result)
+        except Exception as e:
+            logger.exception("[Zepto] %s: sweep failed", loc["name"])
+            for pid in pending:
+                await queue.put({"product_id": pid, "city": loc["name"], "status": "error",
+                        "error_message": str(e), "price": None, "mrp": None,
+                        "title": None, "is_sold_out": False, "url": None, "checked_at": None})
 
     async def event_stream():
+        queue: asyncio.Queue = asyncio.Queue()
+        tasks = [asyncio.create_task(city_worker(loc, queue)) for loc in LOCATIONS]
         done = 0
-        tasks = [
-            asyncio.create_task(worker(pid.strip(), loc))
-            for pid in body.product_ids
-            for loc in LOCATIONS
-        ]
         try:
-            for coro in asyncio.as_completed(tasks):
-                result = await coro
+            while done < total:
+                result = await queue.get()
                 done += 1
                 yield f"data: {json.dumps({**result, 'progress': done, 'total': total})}\n\n"
 
