@@ -696,18 +696,39 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str, write_hist
         app.state.zepto_cron_status["is_running"] = False
 
 
+ZEPTO_SCRAPE_TIMEOUT = int(os.getenv("ZEPTO_SCRAPE_TIMEOUT_SECONDS", "1800"))
+
+
+async def _run_full_zepto_scrape_bounded(app, **kwargs) -> None:
+    """Hard timeout around _run_full_zepto_scrape.
+
+    Incident 2026-08-17: a sweep hung mid-run and never returned. APScheduler's
+    max_instances=1 kept it "running" for 24h+, zombie-holding the browser pool
+    and Snowpad tunnel slots, so every later request (cron and manual) queued
+    forever with nothing to acquire. Cancelling on timeout runs the inner
+    function's own finally blocks (context/tunnel cleanup, is_running=False),
+    same as any other cancellation.
+    """
+    try:
+        await asyncio.wait_for(_run_full_zepto_scrape(app, **kwargs), timeout=ZEPTO_SCRAPE_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.error("Zepto: run exceeded %ds — aborted to free the browser pool", ZEPTO_SCRAPE_TIMEOUT)
+        app.state.zepto_cron_status["is_running"] = False
+        app.state.zepto_cron_status["error"] = f"timed out after {ZEPTO_SCRAPE_TIMEOUT}s"
+
+
 async def run_scheduled_zepto_scrape(app) -> None:
     """Called by APScheduler on cron intervals."""
     if app.state.zepto_cron_status.get("is_running"):
         logger.warning("Zepto: scheduled scrape skipped — a run is already active (duplicate trigger?)")
         return
-    await _run_full_zepto_scrape(app, tab_prefix="Zepto_Run", run_type="zepto_automatic", write_historical=True)
+    await _run_full_zepto_scrape_bounded(app, tab_prefix="Zepto_Run", run_type="zepto_automatic", write_historical=True)
 
 
 async def run_manual_zepto_trigger(app) -> None:
     """Called when user manually triggers the Zepto full scrape from the UI."""
     await asyncio.sleep(0.1)
-    await _run_full_zepto_scrape(app, tab_prefix="Zepto_Manual", run_type="zepto_manual")
+    await _run_full_zepto_scrape_bounded(app, tab_prefix="Zepto_Manual", run_type="zepto_manual")
 
 
 async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str, write_historical: bool = False) -> None:

@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["zepto"])
 
+ZEPTO_CITY_SWEEP_TIMEOUT = int(os.getenv("ZEPTO_CITY_SWEEP_TIMEOUT_SECONDS", "300"))
+
 
 # ── Single city lookup ──────────────────────────────────────────────────────
 
@@ -96,7 +98,10 @@ async def check_zepto_all_cities(body: ZeptoAllCitiesRequest, request: Request):
 
         try:
             async with batch_context(request.app.state):
-                await sweep_city(browser, loc, pending, on_result=_on_result)
+                await asyncio.wait_for(
+                    sweep_city(browser, loc, pending, on_result=_on_result),
+                    timeout=ZEPTO_CITY_SWEEP_TIMEOUT,
+                )
         except Exception as e:
             logger.exception("[Zepto] %s: sweep failed", loc["name"])
             for pid in pending:
