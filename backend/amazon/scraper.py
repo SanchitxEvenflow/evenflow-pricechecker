@@ -266,7 +266,13 @@ async def _block_resources(route) -> None:
     await route.continue_()
 
 
-def _detect_status(soup: BeautifulSoup, response_text: str, asin: str, page_url: str = "") -> str:
+def _detect_status(
+    soup: BeautifulSoup,
+    response_text: str,
+    asin: str,
+    page_url: str = "",
+    http_status: int | None = None,
+) -> str:
     lower_text = response_text.lower()
     if "captcha" in lower_text or "robot check" in lower_text or "continue shopping" in lower_text or "not a robot" in lower_text:
         logger.warning("BLOCKED: bot-challenge page for %s (response_len=%d)", asin, len(response_text))
@@ -318,8 +324,16 @@ def _detect_status(soup: BeautifulSoup, response_text: str, asin: str, page_url:
 
     title_el = soup.select_one("#productTitle")
     if not title_el:
-        logger.warning("not_found for %s — landed_url=%s body_start=%r", asin, page_url, response_text[:300])
-        return "not_found"
+        genuine_not_found = http_status == 404 or any(marker in lower_text for marker in (
+            "sorry! we couldn't find that page",
+            "the web address you entered is not a functioning page",
+        ))
+        status = "not_found" if genuine_not_found else "blocked"
+        logger.warning(
+            "%s for %s — http=%s landed_url=%s body_start=%r",
+            status, asin, http_status, page_url, response_text[:300],
+        )
+        return status
 
     return "check_price"
 
@@ -537,7 +551,7 @@ async def scrape_amazon(
             # "commit" returns once response headers land; we then gate on the element we
             # actually need. Waiting for full domcontentloaded on Amazon's ~2.5MB product
             # HTML over a mobile-carrier exit IP cost ~9s/attempt for no extra data.
-            await page.goto(url, wait_until="commit", timeout=30000)
+            response = await page.goto(url, wait_until="commit", timeout=30000)
 
             logger.info("Page landed at: %s", page.url)
             try:
@@ -554,13 +568,22 @@ async def scrape_amazon(
             if DEBUG_MODE:
                 await _save_debug(page, asin, attempt)
 
-            status = _detect_status(soup, body_text, asin, page_url=page.url)
+            status = _detect_status(
+                soup,
+                body_text,
+                asin,
+                page_url=page.url,
+                http_status=response.status if response else None,
+            )
 
-            # not_found is usually a burned/blocked IP serving a stub page, not a real
-            # missing product — treat it like blocked: fail the proxy and retry on a
-            # fresh draw before trusting it. (Was report_success, which reset the
-            # failure count and kept burned fixed IPs in rotation forever.)
-            if status in ("blocked", "not_found"):
+            # Missing-title stubs are classified as blocked above; explicit 404s are final.
+            if status == "not_found":
+                if source == "snowpad":
+                    snowpad.report_success()
+                _record_source_result(source, success=True)
+                return {**_empty, "status": status, "checked_at": datetime.now(IST).isoformat()}
+
+            if status == "blocked":
                 if source == "snowpad":
                     snowpad.report_failure()
                 _record_source_result(source, success=False)
@@ -615,6 +638,24 @@ async def scrape_amazon(
             category_path = category_data["category_path"] or curl_data.get("category_path")
 
             buy_button = soup.select_one("#add-to-cart-button") or soup.select_one("#buy-now-button")
+            if not price:
+                if source == "snowpad":
+                    snowpad.report_failure()
+                _record_source_result(source, success=False)
+                if attempt < last_attempt_idx:
+                    logger.warning(
+                        "Incomplete product page on attempt %d (%s) for ASIN %s — retrying",
+                        attempt + 1, source, asin,
+                    )
+                    await _safe_close_context(context)
+                    context = None
+                    continue
+                return {
+                    **_empty,
+                    "status": "blocked",
+                    "message": "Product page loaded without a price",
+                    "checked_at": datetime.now(IST).isoformat(),
+                }
             final_status = status if status == "redirected" else ("available" if (price and buy_button) else "price_found")
 
             if source == "snowpad":
@@ -701,13 +742,13 @@ async def scrape_amazon_with_retry(
     skip_curl: bool = False,
     browser_manager=None,
 ) -> dict:
-    """scrape_amazon, retrying the whole ASIN if every proxy tier came back blocked."""
+    """Retry ambiguous/blocked pages through a fresh full proxy ladder."""
     result = await scrape_amazon(asin, browser, skip_curl=skip_curl, browser_manager=browser_manager)
     attempt = 0
     while result.get("status") == "blocked" and attempt < AMAZON_BLOCKED_RETRIES:
         attempt += 1
-        logger.warning("ASIN %s blocked on full proxy ladder — retrying whole scrape (%d/%d)",
-                        asin, attempt, AMAZON_BLOCKED_RETRIES)
+        logger.warning("ASIN %s returned %s on full proxy ladder — retrying (%d/%d)",
+                        asin, result.get("status"), attempt, AMAZON_BLOCKED_RETRIES)
         await asyncio.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
         result = await scrape_amazon(asin, browser, skip_curl=skip_curl, browser_manager=browser_manager)
     return result

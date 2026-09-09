@@ -70,6 +70,39 @@ async def batch_context(app_state):
         async with app_state.total_sem:
             yield
 
+
+async def unique_queue_results(
+    queue: asyncio.Queue,
+    tasks: list[asyncio.Task],
+    expected: set[tuple[str, str]],
+    timeout: float = 15,
+):
+    """Yield every expected (product, city) result exactly once; None is a keep-alive tick."""
+    seen: set[tuple[str, str]] = set()
+    try:
+        while len(seen) < len(expected):
+            try:
+                result = await asyncio.wait_for(queue.get(), timeout=timeout)
+            except asyncio.TimeoutError:
+                if not all(task.done() for task in tasks):
+                    yield None
+                    continue
+                for pid, city in expected - seen:
+                    seen.add((pid, city))
+                    yield {"product_id": pid, "city": city, "status": "error",
+                           "error_message": "worker ended without a result"}
+                break
+
+            key = (result.get("product_id", ""), result.get("city", ""))
+            if key in expected and key not in seen:
+                seen.add(key)
+                yield result
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
 # Canonical city order — must match blinkit/locations.py LOCATIONS list
 BLINKIT_CITIES = [
     "Bangalore", "NCR", "Mumbai", "Hyderabad", "Kolkata",
@@ -220,5 +253,3 @@ def format_flipkart_minutes_row(results_by_city: dict) -> list:
     timestamps = [r.get("checked_at") for r in results_by_city.values() if r.get("checked_at")]
     values.append(max(timestamps) if timestamps else "")
     return values
-
-

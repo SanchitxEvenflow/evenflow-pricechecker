@@ -113,7 +113,7 @@ def complete_log(
                 run_id, success_count, failed_count, sheet_tab)
 
 
-def fail_log(run_id: str, error_message: str) -> None:
+def fail_log(run_id: str, error_message: str, resumable: bool = False) -> None:
     """Mark a run as failed and persist to disk."""
     with _lock:
         logs = _ensure_cache()
@@ -122,6 +122,7 @@ def fail_log(run_id: str, error_message: str) -> None:
                 entry["completed_at"] = datetime.now(IST).isoformat()
                 entry["status"] = "failed"
                 entry["error"] = error_message
+                entry["resumable"] = resumable
                 break
         _persist()
     logger.error("Log failed: run_id=%s error=%s", run_id, error_message)

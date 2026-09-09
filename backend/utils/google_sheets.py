@@ -3,6 +3,10 @@ import base64
 import json
 import logging
 import os
+import time
+import uuid
+from pathlib import Path
+from threading import RLock
 from typing import Any
 
 from google.oauth2.service_account import Credentials
@@ -11,6 +15,12 @@ from googleapiclient.discovery import build
 logger = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+# ponytail: single-process outbox; use a transactional shared queue for multiple app workers.
+_WRITE_LOCK = RLock()
+_ROW_WRITERS = {
+    "batch_update_rows", "batch_update_blinkit_rows",
+    "batch_update_zepto_rows", "batch_update_instamart_rows",
+}
 
 class GoogleSheetsClient:
     def __init__(self):
@@ -417,25 +427,63 @@ class GoogleSheetsClient:
 
     # ── Async wrappers (run sync calls in executor to avoid blocking event loop) ──
 
+    def _outbox_dir(self) -> Path:
+        # Keep this directory on persistent storage, alongside the run log.
+        return Path(os.getenv(
+            "SHEETS_OUTBOX_DIR",
+            str(Path(os.getenv("SCRAPER_LOG_FILE", "scraper_logs.json")).parent / "sheets_outbox"),
+        ))
+
+    def _replay_pending(self, target=None) -> None:
+        for path in sorted(self._outbox_dir().glob("*.json")):
+            entry = json.loads(path.read_text())
+            key = (entry["method"], entry["sheet"], entry["tab"])
+            if target is not None and key != target:
+                continue
+            if entry["method"] not in _ROW_WRITERS:
+                raise ValueError("Invalid pending Sheets writer")
+            getattr(self, entry["method"])(entry["sheet"], entry["tab"], entry["updates"])
+            # Fixed row updates are idempotent if a crash happens before this unlink.
+            path.unlink()
+
+    def _write_journaled(self, method, sheet, tab, updates):
+        with _WRITE_LOCK:
+            directory = self._outbox_dir()
+            directory.mkdir(parents=True, exist_ok=True)
+            path = directory / f"{time.time_ns():020d}-{uuid.uuid4().hex}.json"
+            temporary = path.with_suffix(".tmp")
+            with temporary.open("x") as handle:
+                json.dump({"method": method, "sheet": sheet, "tab": tab, "updates": updates}, handle)
+                handle.flush()
+                os.fsync(handle.fileno())
+            temporary.replace(path)
+            # Replay older updates first so stale values cannot overwrite newer results.
+            self._replay_pending((method, sheet, tab))
+
+    def replay_pending_writes(self) -> None:
+        """Recover journaled result rows before resuming interrupted scraping."""
+        with _WRITE_LOCK:
+            self._replay_pending()
+
     async def async_batch_update_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict]):
         """Async wrapper for batch_update_rows — runs in thread executor."""
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self.batch_update_rows, spreadsheet_id, tab_name, updates)
+        return await asyncio.shield(loop.run_in_executor(None, self._write_journaled, "batch_update_rows", spreadsheet_id, tab_name, updates))
 
     async def async_batch_update_blinkit_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict]):
         """Async wrapper for batch_update_blinkit_rows — runs in thread executor."""
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self.batch_update_blinkit_rows, spreadsheet_id, tab_name, updates)
+        return await asyncio.shield(loop.run_in_executor(None, self._write_journaled, "batch_update_blinkit_rows", spreadsheet_id, tab_name, updates))
 
     async def async_batch_update_zepto_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict]):
         """Async wrapper for batch_update_zepto_rows — runs in thread executor."""
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self.batch_update_zepto_rows, spreadsheet_id, tab_name, updates)
+        return await asyncio.shield(loop.run_in_executor(None, self._write_journaled, "batch_update_zepto_rows", spreadsheet_id, tab_name, updates))
 
     async def async_batch_update_instamart_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict]):
         """Async wrapper for batch_update_instamart_rows — runs in thread executor."""
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self.batch_update_instamart_rows, spreadsheet_id, tab_name, updates)
+        return await asyncio.shield(loop.run_in_executor(None, self._write_journaled, "batch_update_instamart_rows", spreadsheet_id, tab_name, updates))
 
     async def async_batch_update_flipkart_rows(self, spreadsheet_id: str, tab_name: str, updates: list[dict]):
         """Async wrapper for batch_update_flipkart_rows — runs in thread executor."""

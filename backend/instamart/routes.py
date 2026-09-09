@@ -9,10 +9,10 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse
 
 from instamart.locations import LOCATIONS, LOCATIONS_BY_CITY, CITY_NAMES
-from instamart.browser_scraper import scrape_one
+from instamart.browser_scraper import scrape_one, sweep_city
 from schemas.price import InstamartRequest, InstamartAllCitiesRequest, InstamartResponse
 from utils.google_sheets import GoogleSheetsClient
-from utils.scrape_helpers import batch_context, sem_with_timeout
+from utils.scrape_helpers import batch_context, sem_with_timeout, unique_queue_results
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ async def check_instamart_price(body: InstamartRequest, request: Request):
         )
 
     cache = getattr(request.app.state, "cache", None)
-    cache_key = f"instamart_{body.product_id}_{body.city}"
+    cache_key = f"instamart_v2_{body.product_id}_{body.city}"
 
     if cache is not None and cache_key in cache:
         result = cache[cache_key]
@@ -58,80 +58,59 @@ async def check_instamart_all_cities(body: InstamartAllCitiesRequest, request: R
     """
     app_state = request.app.state
 
-    # Build work items: (product_id, city_data)
-    work_items = [
-        (pid.strip(), loc)
-        for pid in body.product_ids
-        for loc in LOCATIONS
-    ]
-    total = len(work_items)
+    pids = list(dict.fromkeys(pid.strip() for pid in body.product_ids if pid.strip()))
+    total = len(pids) * len(LOCATIONS)
 
     if total == 0:
         async def empty_stream():
             yield f"data: {json.dumps({'done': True, 'total': 0})}\n\n"
         return StreamingResponse(empty_stream(), media_type="text/event-stream")
 
-    async def worker(product_id: str, loc: dict, target_variant_name: str | None = None) -> dict:
-        is_duplicate = sum(1 for l in LOCATIONS if l["name"] == loc["name"]) > 1
-        display_city = f"{loc['name']} - {loc['area']}" if is_duplicate else loc["name"]
-        
-        cache = getattr(request.app.state, "cache", None)
-        cache_key = f"instamart_{product_id}_{display_city}"
-        
-        if cache is not None and cache_key in cache:
-            return cache[cache_key].copy()
+    async def city_worker(loc: dict, queue: asyncio.Queue) -> None:
+        city = loc["name"]
+        cache = getattr(app_state, "cache", None)
+        pending = []
+        emitted: set[str] = set()
+        for pid in pids:
+            cache_key = f"instamart_v2_{pid}_{city}"
+            if cache is not None and cache_key in cache:
+                emitted.add(pid)
+                await queue.put(cache[cache_key].copy())
+            else:
+                pending.append(pid)
 
-        browser = await app_state.browser_manager.acquire() if getattr(app_state, "browser_manager", None) else None
-        if not browser:
-            return {"product_id": product_id, "city": display_city, "status": "error",
-                    "error_message": "browser pool unavailable", "price": None, "mrp": None,
-                    "title": None, "is_sold_out": False, "url": None, "checked_at": None}
+        if not pending:
+            return
 
-        # Report under display_city (disambiguates duplicate city names).
-        loc_display = {**loc, "name": display_city}
-        async with batch_context(app_state):
-            result = await scrape_one(browser, loc_display, product_id, target_variant_name)
+        def on_result(pid: str, result: dict) -> None:
+            emitted.add(pid)
+            if cache is not None and result.get("status") not in ("error", "invalid_format"):
+                cache[f"instamart_v2_{pid}_{city}"] = result.copy()
+            queue.put_nowait(result)
 
-        if cache is not None and result.get("status") not in ("error", "invalid_format"):
-            cache[cache_key] = result.copy()
-
-        return result
+        try:
+            browser = await app_state.browser_manager.acquire()
+            async with batch_context(app_state):
+                await sweep_city(browser, loc, pending, on_result=on_result)
+        except Exception as exc:
+            logger.exception("[Instamart] %s: city sweep failed", city)
+            for pid in pending:
+                if pid not in emitted:
+                    await queue.put({"product_id": pid, "city": city, "status": "error",
+                                     "error_message": str(exc)})
 
     async def event_stream():
         done = 0
-        precheck_tasks = []
-        remaining_tasks = []
-        try:
-            # 1. First-city pre-check: Scrape LOCATIONS[0] for all PIDs concurrently
-            for pid in body.product_ids:
-                if LOCATIONS:
-                    precheck_tasks.append(asyncio.create_task(worker(pid.strip(), LOCATIONS[0])))
-                    
-            # Wait for all prechecks and yield them
-            target_variants = {}
-            for coro in asyncio.as_completed(precheck_tasks):
-                result = await coro
-                target_variants[result['product_id']] = result.get('title')
-                done += 1
-                yield f"data: {json.dumps({**result, 'progress': done, 'total': total})}\n\n"
-
-            # 2. Scrape remaining cities
-            for pid in body.product_ids:
-                clean_pid = pid.strip()
-                target_variant = target_variants.get(clean_pid)
-                for loc in LOCATIONS[1:]:
-                    remaining_tasks.append(asyncio.create_task(worker(clean_pid, loc, target_variant)))
-
-            for coro in asyncio.as_completed(remaining_tasks):
-                result = await coro
-                done += 1
-                yield f"data: {json.dumps({**result, 'progress': done, 'total': total})}\n\n"
-
-            yield f"data: {json.dumps({'done': True, 'total': total})}\n\n"
-        finally:
-            for task in precheck_tasks + remaining_tasks:
-                if not task.done():
-                    task.cancel()
+        queue: asyncio.Queue = asyncio.Queue()
+        tasks = [asyncio.create_task(city_worker(loc, queue)) for loc in LOCATIONS]
+        expected = {(pid, loc["name"]) for pid in pids for loc in LOCATIONS}
+        async for result in unique_queue_results(queue, tasks, expected):
+            if result is None:
+                yield ": keep-alive\n\n"
+                continue
+            done += 1
+            yield f"data: {json.dumps({**result, 'progress': done, 'total': total})}\n\n"
+        yield f"data: {json.dumps({'done': True, 'total': total})}\n\n"
 
     headers = {
         "Cache-Control": "no-cache",

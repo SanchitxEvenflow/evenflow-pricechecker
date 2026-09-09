@@ -12,13 +12,11 @@ from zepto.locations import LOCATIONS, LOCATIONS_BY_CITY, CITY_NAMES
 from zepto.browser_scraper import scrape_one, sweep_city
 from schemas.price import ZeptoRequest, ZeptoAllCitiesRequest, ZeptoResponse
 from utils.google_sheets import GoogleSheetsClient
-from utils.scrape_helpers import batch_context, sem_with_timeout
+from utils.scrape_helpers import batch_context, sem_with_timeout, unique_queue_results
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["zepto"])
-
-ZEPTO_CITY_SWEEP_TIMEOUT = int(os.getenv("ZEPTO_CITY_SWEEP_TIMEOUT_SECONDS", "300"))
 
 
 # ── Single city lookup ──────────────────────────────────────────────────────
@@ -34,7 +32,7 @@ async def check_zepto_price(body: ZeptoRequest, request: Request):
         )
 
     cache = getattr(request.app.state, "cache", None)
-    cache_key = f"zepto_{body.product_id}_{body.city}"
+    cache_key = f"zepto_v2_{body.product_id}_{body.city}"
 
     if cache is not None and cache_key in cache:
         result = cache[cache_key]
@@ -62,7 +60,7 @@ async def check_zepto_all_cities(body: ZeptoAllCitiesRequest, request: Request):
     (product, city) pair — scrape_one() per pair used to redo it every time.
     Results are streamed as SSE events as they complete.
     """
-    pids = [pid.strip() for pid in body.product_ids]
+    pids = list(dict.fromkeys(pid.strip() for pid in body.product_ids if pid.strip()))
     total = len(pids) * len(LOCATIONS)
 
     if total == 0:
@@ -73,8 +71,9 @@ async def check_zepto_all_cities(body: ZeptoAllCitiesRequest, request: Request):
     async def city_worker(loc: dict, queue: asyncio.Queue) -> None:
         cache = getattr(request.app.state, "cache", None)
         pending = []
+        emitted: set[str] = set()
         for pid in pids:
-            cache_key = f"zepto_{pid}_{loc['name']}"
+            cache_key = f"zepto_v2_{pid}_{loc['name']}"
             if cache is not None and cache_key in cache:
                 await queue.put(cache[cache_key].copy())
             else:
@@ -92,38 +91,34 @@ async def check_zepto_all_cities(body: ZeptoAllCitiesRequest, request: Request):
             return
 
         def _on_result(pid: str, r: dict) -> None:
+            emitted.add(pid)
             if cache is not None and r.get("status") not in ("error", "invalid_format"):
-                cache[f"zepto_{pid}_{loc['name']}"] = r.copy()
+                cache[f"zepto_v2_{pid}_{loc['name']}"] = r.copy()
             queue.put_nowait(r)
 
         try:
             async with batch_context(request.app.state):
-                await asyncio.wait_for(
-                    sweep_city(browser, loc, pending, on_result=_on_result),
-                    timeout=ZEPTO_CITY_SWEEP_TIMEOUT,
-                )
+                await sweep_city(browser, loc, pending, on_result=_on_result)
         except Exception as e:
             logger.exception("[Zepto] %s: sweep failed", loc["name"])
             for pid in pending:
-                await queue.put({"product_id": pid, "city": loc["name"], "status": "error",
-                        "error_message": str(e), "price": None, "mrp": None,
-                        "title": None, "is_sold_out": False, "url": None, "checked_at": None})
+                if pid not in emitted:
+                    await queue.put({"product_id": pid, "city": loc["name"], "status": "error",
+                            "error_message": str(e), "price": None, "mrp": None,
+                            "title": None, "is_sold_out": False, "url": None, "checked_at": None})
 
     async def event_stream():
         queue: asyncio.Queue = asyncio.Queue()
         tasks = [asyncio.create_task(city_worker(loc, queue)) for loc in LOCATIONS]
+        expected = {(pid, loc["name"]) for pid in pids for loc in LOCATIONS}
         done = 0
-        try:
-            while done < total:
-                result = await queue.get()
-                done += 1
-                yield f"data: {json.dumps({**result, 'progress': done, 'total': total})}\n\n"
-
-            yield f"data: {json.dumps({'done': True, 'total': total})}\n\n"
-        finally:
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
+        async for result in unique_queue_results(queue, tasks, expected):
+            if result is None:
+                yield ": keep-alive\n\n"
+                continue
+            done += 1
+            yield f"data: {json.dumps({**result, 'progress': done, 'total': total})}\n\n"
+        yield f"data: {json.dumps({'done': True, 'total': total})}\n\n"
 
     headers = {
         "Cache-Control": "no-cache",

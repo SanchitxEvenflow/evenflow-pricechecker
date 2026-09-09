@@ -20,6 +20,7 @@ from utils.scrape_helpers import CHUNK_SIZE, SCRAPE_CONCURRENCY, batch_context, 
 logger = logging.getLogger(__name__)
 
 IST = timezone(timedelta(hours=5, minutes=30))
+_UNCACHEABLE_STATUSES = {"error", "blocked", "not_found", "invalid_format"}
 
 # ── Amazon Price Router ─────────────────────────────────────────────────────
 
@@ -32,7 +33,8 @@ async def check_amazon_price(body: AmazonRequest, request: Request):
     cache = getattr(request.app.state, "cache", None)
     cache_key = f"amazon_{body.asin}"
     
-    if cache is not None and cache_key in cache:
+    if (not body.force_refresh and cache is not None and cache_key in cache
+            and cache[cache_key].get("status") not in _UNCACHEABLE_STATUSES):
         result = cache[cache_key]
     else:
         async with sem_with_timeout(request.app.state.total_sem):
@@ -42,7 +44,7 @@ async def check_amazon_price(body: AmazonRequest, request: Request):
             curl_data = await fetch_curl_supplement(body.asin, cookies)
             merge_curl_supplement(result, curl_data)
         
-        if cache is not None and result.get("status") not in ("error", "invalid_format"):
+        if cache is not None and result.get("status") not in _UNCACHEABLE_STATUSES:
             cache[cache_key] = result
 
     return AmazonResponse(
@@ -103,9 +105,15 @@ _format_update = format_update
 
 
 async def _scrape_with_sem(asin: str, row: int, app_state) -> dict:
-    async with batch_context(app_state):
-        result = await scrape_amazon_with_retry(asin, await get_browser(app_state), skip_curl=True, browser_manager=app_state.browser_manager)
-        result["row"] = row
+    try:
+        async with batch_context(app_state):
+            result = await scrape_amazon_with_retry(asin, await get_browser(app_state), skip_curl=True, browser_manager=app_state.browser_manager)
+            result["row"] = row
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.exception("Amazon batch worker failed for ASIN %s", asin)
+        return {"asin": asin, "row": row, "status": "error", "message": str(exc), "checked_at": ""}
     cookies = result.pop("_cookies", {}) or {}
     if cookies:
         curl_data = await fetch_curl_supplement(asin, cookies)
@@ -254,20 +262,14 @@ async def scrape_batch(
         pending_writes.append(_format_update(result))
 
         if len(pending_writes) >= CHUNK_SIZE:
-            try:
-                await sheets_client.async_batch_update_rows(body.sheet_id, body.tab_name, pending_writes)
-                logger.info("scrape_batch: wrote %d rows (%d/%d done)",
-                            len(pending_writes), len(all_results), len(body.rows))
-            except Exception:
-                logger.exception("scrape_batch: sheets write failed")
+            await sheets_client.async_batch_update_rows(body.sheet_id, body.tab_name, pending_writes)
+            logger.info("scrape_batch: wrote %d rows (%d/%d done)",
+                        len(pending_writes), len(all_results), len(body.rows))
             pending_writes = []
 
     if pending_writes:
-        try:
-            await sheets_client.async_batch_update_rows(body.sheet_id, body.tab_name, pending_writes)
-            logger.info("scrape_batch: wrote final %d rows", len(pending_writes))
-        except Exception:
-            logger.exception("scrape_batch: final sheets write failed")
+        await sheets_client.async_batch_update_rows(body.sheet_id, body.tab_name, pending_writes)
+        logger.info("scrape_batch: wrote final %d rows", len(pending_writes))
 
     return {"status": "success", "processed": len(all_results), "data": all_results}
 
@@ -291,16 +293,20 @@ async def scrape_batch_stream(
     app_state = request.app.state
 
     async def worker(row_data: dict) -> None:
-        async with batch_context(app_state):
-            result = await scrape_amazon_with_retry(row_data["asin"], await get_browser(app_state), skip_curl=True, browser_manager=app_state.browser_manager)
-            result["row"] = row_data["row"]
         try:
+            async with batch_context(app_state):
+                result = await scrape_amazon_with_retry(row_data["asin"], await get_browser(app_state), skip_curl=True, browser_manager=app_state.browser_manager)
+                result["row"] = row_data["row"]
             cookies = result.pop("_cookies", {}) or {}
             if cookies:
                 curl_data = await fetch_curl_supplement(row_data["asin"], cookies)
                 merge_curl_supplement(result, curl_data)
-        except Exception:
-            logger.exception("scrape_batch_stream: curl supplement failed for ASIN %s", row_data["asin"])
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("scrape_batch_stream: worker failed for ASIN %s", row_data["asin"])
+            result = {"asin": row_data["asin"], "row": row_data["row"],
+                      "status": "error", "message": str(exc), "checked_at": ""}
         await queue.put(result)
 
     async def event_stream():
@@ -321,9 +327,14 @@ async def scrape_batch_stream(
                 try:
                     await sheets_client.async_batch_update_rows(body.sheet_id, body.tab_name, pending_updates)
                     logger.info("Stream: wrote %d rows to sheets (%d/%d done)", len(pending_updates), done, total)
-                except Exception:
+                except Exception as exc:
                     logger.exception("Stream: sheets write failed at progress %d/%d", done, total)
-                pending_updates = []
+                    if done == total:
+                        yield f"data: {json.dumps({**result, 'progress': done, 'total': total})}\n\n"
+                        yield f"data: {json.dumps({'done': False, 'total': total, 'error': str(exc)})}\n\n"
+                        return
+                else:
+                    pending_updates = []
 
             payload = json.dumps({**result, "progress": done, "total": total})
             yield f"data: {payload}\n\n"
@@ -400,7 +411,8 @@ async def scrape_manual(body: ManualScrapeRequest, request: Request):
         cache = getattr(app_state, "cache", None)
         cache_key = f"amazon_{asin}"
 
-        if cache is not None and cache_key in cache:
+        if (cache is not None and cache_key in cache
+                and cache[cache_key].get("status") not in _UNCACHEABLE_STATUSES):
             return cache[cache_key].copy()
 
         # total_sem is the global hard cap on live browser contexts. Plain acquire
@@ -419,7 +431,7 @@ async def scrape_manual(body: ManualScrapeRequest, request: Request):
         except Exception:
             logger.exception("scrape_manual: curl supplement failed for ASIN %s", asin)
 
-        if cache is not None and result.get("status") not in ("error", "invalid_format"):
+        if cache is not None and result.get("status") not in _UNCACHEABLE_STATUSES:
             cache[cache_key] = result.copy()
         return result
 

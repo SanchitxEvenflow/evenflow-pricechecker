@@ -62,8 +62,7 @@ class Socks5Provider:
         # Failure tracking
         self._fail_count: int = 0
         self._MAX_FAILS_BEFORE_WARN = 5
-        # Trial plan caps concurrent connections (2) — a shared semaphore keeps every
-        # caller (Amazon, Instamart, ...) under that ceiling instead of each one guessing.
+        # Shared flow/tunnel caps keep every scraper under the Snowpad plan ceiling.
         self._sem: asyncio.Semaphore | None = None
         # Separate semaphore gating actual raw SOCKS5 tunnels (see socks5_bridge.py).
         # Must NOT be the same object as _sem: _sem is held for a whole scrape flow
@@ -95,9 +94,10 @@ class Socks5Provider:
             self._port = 9999
 
         try:
-            max_concurrency = int(os.getenv("SNOWPAD_MAX_CONCURRENCY", "2"))
+            max_concurrency = int(os.getenv("SNOWPAD_MAX_CONCURRENCY", "120"))
         except ValueError:
-            max_concurrency = 2
+            logger.warning("[Socks5Provider] Invalid SNOWPAD_MAX_CONCURRENCY — using 120")
+            max_concurrency = 120
         self._max_concurrency = max_concurrency
         self._sem = asyncio.Semaphore(max_concurrency)
         self._conn_sem = asyncio.Semaphore(max_concurrency)

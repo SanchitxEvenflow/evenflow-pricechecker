@@ -10,11 +10,11 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse
 
 from blinkit.locations import LOCATIONS, LOCATIONS_BY_CITY, CITY_NAMES
-from blinkit.scraper import fetch_blinkit_data
+from blinkit.scraper import fetch_blinkit_city, fetch_blinkit_data
 from proxy.socks5_provider import get_provider as get_snowpad_provider
 from schemas.price import BlinkitRequest, BlinkitAllCitiesRequest, BlinkitResponse
 from utils.google_sheets import GoogleSheetsClient
-from utils.scrape_helpers import batch_context, sem_with_timeout
+from utils.scrape_helpers import batch_context, sem_with_timeout, unique_queue_results
 
 logger = logging.getLogger(__name__)
 
@@ -72,95 +72,80 @@ async def check_blinkit_all_cities(body: BlinkitAllCitiesRequest, request: Reque
     Scrape Blinkit for one or more product IDs across all 10 cities.
     Results are streamed as SSE events as they complete.
     """
-    # Build work items: (product_id, city_data)
-    work_items = []
-    for pid in body.product_ids:
-        for loc in LOCATIONS:
-            work_items.append((pid.strip(), loc))
-
-    total = len(work_items)
+    pids = list(dict.fromkeys(pid.strip() for pid in body.product_ids if pid.strip()))
+    total = len(pids) * len(LOCATIONS)
 
     if total == 0:
         async def empty_stream():
             yield f"data: {json.dumps({'done': True, 'total': 0})}\n\n"
         return StreamingResponse(empty_stream(), media_type="text/event-stream")
 
-    async def worker(product_id: str, loc: dict, fallback_title: str | None = None) -> dict:
+    async def city_worker(loc: dict, queue: asyncio.Queue) -> None:
+        city = loc["name"]
         cache = getattr(request.app.state, "cache", None)
-        cache_key = f"blinkit_{product_id}_{loc['name']}"
+        pending = []
+        emitted: set[str] = set()
+        for pid in pids:
+            cache_key = f"blinkit_{pid}_{city}"
+            if cache is not None and cache_key in cache:
+                emitted.add(pid)
+                await queue.put(cache[cache_key].copy())
+            else:
+                pending.append(pid)
 
-        if cache is not None and cache_key in cache:
-            return cache[cache_key].copy()
+        if not pending:
+            return
 
-        async with batch_context(request.app.state):
-            loop = asyncio.get_running_loop()
-            snowpad = get_snowpad_provider()
-            await snowpad.acquire_slot()
-            try:
-                result = await loop.run_in_executor(
-                    request.app.state.thread_pool,
-                    partial(
-                        fetch_blinkit_data,
-                        item_id=product_id,
-                        pincode=loc["pincode"],
-                        lat=loc["lat"],
-                        lon=loc["lng"],
-                        city=loc["name"],
-                    ),
-                )
-            except Exception:
-                logger.exception("blinkit worker error for %s %s", product_id, loc["name"])
-                return {"product_id": product_id, "city": loc["name"], "status": "error"}
-            finally:
-                snowpad.release_slot()
+        loop = asyncio.get_running_loop()
 
-            if not result.get("title") and fallback_title:
-                result["title"] = fallback_title
+        def on_result(pid: str, result: dict) -> None:
+            emitted.add(pid)
 
-            if cache is not None and result.get("status") not in ("error", "invalid_format"):
-                cache[cache_key] = result.copy()
+            def enqueue() -> None:
+                if cache is not None and result.get("status") not in ("error", "invalid_format"):
+                    cache[f"blinkit_{pid}_{city}"] = result.copy()
+                queue.put_nowait(result)
 
-            return result
+            loop.call_soon_threadsafe(enqueue)
+
+        try:
+            async with batch_context(request.app.state):
+                snowpad = get_snowpad_provider()
+                await snowpad.acquire_slot()
+                try:
+                    await loop.run_in_executor(
+                        request.app.state.thread_pool,
+                        partial(
+                            fetch_blinkit_city,
+                            item_ids=pending,
+                            pincode=loc["pincode"],
+                            lat=loc["lat"],
+                            lon=loc["lng"],
+                            city=city,
+                            on_result=on_result,
+                        ),
+                    )
+                finally:
+                    snowpad.release_slot()
+        except Exception as exc:
+            logger.exception("Blinkit city worker failed for %s", city)
+            for pid in pending:
+                if pid not in emitted:
+                    await queue.put({"product_id": pid, "city": city, "status": "error",
+                                     "error_message": str(exc)})
 
     async def event_stream():
+        queue: asyncio.Queue = asyncio.Queue()
+        tasks = [asyncio.create_task(city_worker(loc, queue)) for loc in LOCATIONS]
+        expected = {(pid, loc["name"]) for pid in pids for loc in LOCATIONS}
         done = 0
-        precheck_tasks = []
-        remaining_tasks = []
-        try:
-            # 1. First-city pre-check: Scrape LOCATIONS[0] for all PIDs concurrently
-            for pid in body.product_ids:
-                if LOCATIONS:
-                    precheck_tasks.append(asyncio.create_task(worker(pid.strip(), LOCATIONS[0])))
-                    
-            # Wait for all prechecks and store their titles
-            first_city_results = {}
-            for coro in asyncio.as_completed(precheck_tasks):
-                result = await coro
-                pid = result["product_id"]
-                first_city_results[pid] = result
-                done += 1
-                yield f"data: {json.dumps({**result, 'progress': done, 'total': total})}\n\n"
-
-            # 2. Scrape remaining cities, injecting fallback title if available
-            for pid in body.product_ids:
-                pid = pid.strip()
-                fallback_title = first_city_results.get(pid, {}).get("title")
-                if fallback_title == "Not Found" or fallback_title == "Unknown Product":
-                    fallback_title = None
-
-                for loc in LOCATIONS[1:]:
-                    remaining_tasks.append(asyncio.create_task(worker(pid, loc, fallback_title)))
-
-            for coro in asyncio.as_completed(remaining_tasks):
-                result = await coro
-                done += 1
-                yield f"data: {json.dumps({**result, 'progress': done, 'total': total})}\n\n"
-
-            yield f"data: {json.dumps({'done': True, 'total': total})}\n\n"
-        finally:
-            for task in precheck_tasks + remaining_tasks:
-                if not task.done():
-                    task.cancel()
+        async for result in unique_queue_results(queue, tasks, expected):
+            if result is None:
+                yield ": keep-alive\n\n"
+                continue
+            done += 1
+            yield f"data: {json.dumps({**result, 'progress': done, 'total': total})}\n\n"
+        yield f"data: {json.dumps({'done': True, 'total': total})}\n\n"
 
     headers = {
         "Cache-Control": "no-cache",

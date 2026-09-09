@@ -24,7 +24,9 @@ AWS WAF problem):
 """
 
 import json
+import asyncio
 import logging
+import os
 import random
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -52,6 +54,7 @@ _HOME_URL = "https://www.zepto.com/"
 # on the WAF's own auto-retry after solving the JS challenge. Confirmed via
 # side-by-side testing 2026-08-15 (same session, same IP, only slug changed).
 _ITEM_URL = "https://www.zepto.com/pn/x/pvid/{item_id}"
+_SESSION_BATCH_SIZE = max(1, int(os.getenv("ZEPTO_SESSION_BATCH_SIZE", "25")))
 
 
 async def _block_heavy(route):
@@ -144,25 +147,31 @@ async def open_city_page(browser, loc: dict, session_id: str | None = None):
     if proxy:
         ctx_opts["proxy"] = proxy
     ctx = await browser.new_context(**ctx_opts)
-    await ctx.route("**/*", _block_heavy)
-    page = await ctx.new_page()
-
-    await _goto_ok(page, _HOME_URL)
     try:
-        await page.locator('[data-testid="user-address"]').click(timeout=15000)
-        # current-location-section renders ~1s after the address modal opens
-        # (async re-render) — count() right after click always reads 0. click()
-        # auto-waits for it to attach instead of racing a synchronous count().
-        await page.locator('[data-testid="current-location-section"]').click(timeout=15000)
-        await page.wait_for_timeout(3500)  # let store resolve from coords
-    except Exception as e:
-        logger.warning("[Zepto] %s: location-set flow failed: %s", loc.get("name"), e)
-    return ctx, page
+        await ctx.route("**/*", _block_heavy)
+        page = await ctx.new_page()
+
+        await _goto_ok(page, _HOME_URL)
+        try:
+            await page.locator('[data-testid="user-address"]').click(timeout=15000)
+            # current-location-section renders ~1s after the address modal opens
+            # (async re-render) — count() right after click always reads 0. click()
+            # auto-waits for it to attach instead of racing a synchronous count().
+            await page.locator('[data-testid="current-location-section"]').click(timeout=15000)
+            await page.wait_for_timeout(3500)  # let store resolve from coords
+        except Exception as e:
+            logger.warning("[Zepto] %s: location-set flow failed: %s", loc.get("name"), e)
+            raise RuntimeError("delivery location setup failed") from e
+        return ctx, page
+    except BaseException:
+        await ctx.close()
+        raise
 
 
 async def close_ctx(ctx):
     try:
-        await ctx.close()
+        if ctx is not None:
+            await asyncio.wait_for(ctx.close(), timeout=10)
     except Exception:
         pass
 
@@ -173,7 +182,6 @@ async def _goto_ok(page, url: str, tries: int = 4):
     for i in range(tries):
         try:
             resp = await page.goto(url, wait_until="domcontentloaded", timeout=45000)
-            await page.wait_for_timeout(3000)  # let RSC payload finish streaming/hydrating
         except Exception as e:
             logger.warning("[Zepto] goto error (try %d): %s", i + 1, e)
             await page.wait_for_timeout(1500)
@@ -214,14 +222,17 @@ async def scrape_item(page, item_id: str, city: str) -> dict:
     if resp.status != 200:
         return result(error_message=f"http_{resp.status}")
 
-    html = await page.content()
-    extracted = _extract_from_html(html)
-    if extracted is None:
-        return result(
-            title=f"Unserviceable at {city}",
-            status="unserviceable",
-            is_sold_out=True,
-        )
+    # The RSC product object is often present as soon as DOMContentLoaded fires.
+    # Only wait when it is not, preserving the old 3s ceiling for slow pages.
+    extracted = None
+    for wait_ms in (0, 400, 800, 1800):
+        if wait_ms:
+            await page.wait_for_timeout(wait_ms)
+        extracted = _extract_from_html(await page.content())
+        if extracted is not None and (extracted.get("price") is not None or extracted.get("is_sold_out")):
+            break
+    if extracted is None or (extracted.get("price") is None and not extracted.get("is_sold_out")):
+        return result(error_message="product_data_incomplete")
 
     logger.info("[Zepto] %s: OK %s = Rs.%s", city, extracted["title"], extracted["price"])
     return result(
@@ -234,62 +245,87 @@ async def scrape_item(page, item_id: str, city: str) -> dict:
 
 
 async def scrape_one(browser, loc: dict, item_id: str) -> dict:
-    """One item in one city with a throwaway context. For interactive/single lookups."""
-    snowpad = get_snowpad_provider()
-    await snowpad.acquire_slot()
-    try:
-        session_id = uuid.uuid4().hex[:8]
-        ctx, page = await open_city_page(browser, loc, session_id=session_id)
-        try:
-            return await scrape_item(page, item_id, loc["name"])
-        finally:
-            await close_ctx(ctx)
-            await snowpad.close_bridge(session_id)
-    finally:
-        snowpad.release_slot()
+    """Use the same bounded recovery for single and bulk lookups."""
+    results = await sweep_city(browser, loc, [item_id])
+    return results[item_id.strip()]
 
 
 async def sweep_city(browser, loc: dict, item_ids, on_result=None, recycle_after_failures: int = 3) -> dict:
-    """
-    Scrape every item_id for one city on a single reused context. Recycles the
-    context (fresh Snowpad session) after `recycle_after_failures` consecutive
-    errors. `on_result(pid, result)` is called per item if given. Returns {pid: result}.
-    """
+    """Sweep with bounded per-item attempts; setup failures never skip later PIDs."""
+    pids = list(dict.fromkeys(pid.strip() for pid in item_ids if pid.strip()))
     snowpad = get_snowpad_provider()
-    results: dict[str, dict] = {}
+    results = {}
+    ctx = page = None
+    session_id = None
+    item_timeout = float(os.getenv("ZEPTO_ITEM_TIMEOUT_SECONDS", "240"))
+
+    async def close_session():
+        nonlocal ctx, page, session_id
+        try:
+            await close_ctx(ctx)
+        finally:
+            ctx = page = None
+            if session_id is not None:
+                await snowpad.close_bridge(session_id)
+                session_id = None
+
+    async def reset_context():
+        nonlocal ctx, page, session_id
+        await close_session()
+        for attempt in range(3):
+            session_id = uuid.uuid4().hex[:8]
+            try:
+                ctx, page = await asyncio.wait_for(
+                    open_city_page(browser, loc, session_id=session_id), timeout=120,
+                )
+                return
+            except Exception:
+                await close_session()
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(0.5 * (attempt + 1))
+
     await snowpad.acquire_slot()
-    session_id = uuid.uuid4().hex[:8]
-    ctx, page = await open_city_page(browser, loc, session_id=session_id)
-    consecutive_fail = 0
     try:
-        for n, pid in enumerate(item_ids):
-            if n > 0:
-                # Zepto's WAF rate-limits (429) a single IP hammering PDPs back-to-back —
-                # this pacing is what the old curl scraper did too, just per-request instead
-                # of once up front. Cheap insurance against burning a whole city sweep.
-                await page.wait_for_timeout(random.uniform(600, 1400))
-            pid = pid.strip()
-            r = await scrape_item(page, pid, loc["name"])
-            if r.get("status") == "error":
-                consecutive_fail += 1
-                if consecutive_fail >= recycle_after_failures:
-                    logger.warning("[Zepto] %s: %d consecutive fails — recycling context (fresh IP)",
-                                   loc["name"], consecutive_fail)
-                    await close_ctx(ctx)
-                    await snowpad.close_bridge(session_id)
-                    snowpad.release_slot()
-                    await snowpad.acquire_slot()
-                    session_id = uuid.uuid4().hex[:8]
-                    ctx, page = await open_city_page(browser, loc, session_id=session_id)
+        pending = pids
+        for pass_index in range(2):
+            retry_ids = []
+            consecutive_fail = 0
+            for n, pid in enumerate(pending):
+                try:
+                    if page is None or n % _SESSION_BATCH_SIZE == 0 or consecutive_fail >= recycle_after_failures:
+                        await reset_context()
+                        consecutive_fail = 0
+                    elif n:
+                        await page.wait_for_timeout(random.uniform(250, 650))
+                    result = await asyncio.wait_for(
+                        scrape_item(page, pid, loc["name"]), timeout=item_timeout,
+                    )
+                except Exception as exc:
+                    result = {
+                        "product_id": pid, "city": loc["name"], "title": None,
+                        "price": None, "mrp": None, "status": "error",
+                        "is_sold_out": False, "url": _ITEM_URL.format(item_id=pid),
+                        "checked_at": datetime.now(IST).isoformat(),
+                        "error_message": str(exc) or type(exc).__name__,
+                    }
+                    await close_session()
+                results[pid] = result
+                if result.get("status") == "error":
+                    consecutive_fail += 1
+                    if pass_index == 0:
+                        retry_ids.append(pid)
+                        continue
+                else:
                     consecutive_fail = 0
-                    r = await scrape_item(page, pid, loc["name"])
-            else:
-                consecutive_fail = 0
-            results[pid] = r
-            if on_result is not None:
-                on_result(pid, r)
+                if on_result is not None:
+                    on_result(pid, result)
+            if not retry_ids:
+                break
+            pending = retry_ids
     finally:
-        await close_ctx(ctx)
-        await snowpad.close_bridge(session_id)
-        snowpad.release_slot()
+        try:
+            await close_session()
+        finally:
+            snowpad.release_slot()
     return results

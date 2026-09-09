@@ -23,7 +23,9 @@ IPs get blocked harder than residential — if block rate is high on the VPS, a
 residential proxy on the browser context is the next lever.
 """
 
+import asyncio
 import logging
+import os
 import re
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -48,6 +50,7 @@ _SOFT_ERRORS = ("something went wrong", "request blocked", "your request looks a
 
 _HOME_URL = "https://www.swiggy.com/instamart"
 _ITEM_URL = "https://www.swiggy.com/instamart/item/{item_id}"
+_SESSION_BATCH_SIZE = max(1, int(os.getenv("INSTAMART_SESSION_BATCH_SIZE", "25")))
 
 
 async def _block_heavy(route):
@@ -89,26 +92,29 @@ async def open_city_page(browser, loc: dict, session_id: str | None = None):
     if proxy:
         ctx_opts["proxy"] = proxy
     ctx = await browser.new_context(**ctx_opts)
-    await ctx.route("**/*", _block_heavy)
-    page = await ctx.new_page()
-
-    # Landing on the home page solves the WAF challenge and exposes the GPS button.
-    await _goto_ok(page, _HOME_URL)
     try:
-        gps = page.locator("[data-testid='set-gps-button']")
-        if await gps.count() > 0:
+        await ctx.route("**/*", _block_heavy)
+        page = await ctx.new_page()
+
+        # Landing on the home page solves the WAF challenge and exposes the GPS button.
+        await _goto_ok(page, _HOME_URL)
+        try:
+            gps = page.locator("[data-testid='set-gps-button']")
             await gps.click(timeout=6000)
             await page.wait_for_timeout(3500)  # let store resolve from coords
-    except Exception as e:
-        # If the button is absent, location often auto-resolves from the geolocation
-        # already set on the context — not fatal, just log.
-        logger.warning("[Instamart] %s: set-gps click skipped/failed: %s", loc.get("name"), e)
-    return ctx, page
+        except Exception as e:
+            logger.warning("[Instamart] %s: set-gps click skipped/failed: %s", loc.get("name"), e)
+            raise RuntimeError("delivery location setup failed") from e
+        return ctx, page
+    except BaseException:
+        await ctx.close()
+        raise
 
 
 async def close_ctx(ctx):
     try:
-        await ctx.close()
+        if ctx is not None:
+            await asyncio.wait_for(ctx.close(), timeout=10)
     except Exception:
         pass
 
@@ -118,7 +124,21 @@ async def _goto_ok(page, url: str, tries: int = 4) -> bool:
     for i in range(tries):
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=45000)
-            await page.wait_for_timeout(3500)  # let React render + XHRs populate DOM
+            if url != _HOME_URL:
+                try:
+                    await page.wait_for_function(
+                        """() => {
+                            const body = (document.body?.innerText || '').toLowerCase();
+                            const price = document.querySelector(
+                                "[data-testid='item-offer-price'], [data-testid='item-mrp-price']");
+                            return (price && /[0-9]/.test(price.textContent || '')) ||
+                                 ['sold out', 'out of stock', 'notify me', 'something went wrong',
+                                  'request blocked', 'your request looks automated'].some(x => body.includes(x));
+                        }""",
+                        timeout=3500,
+                    )
+                except Exception:
+                    pass  # preserve the old 3.5s ceiling for unserviceable/slow pages
         except Exception as e:
             logger.warning("[Instamart] goto error (try %d): %s", i + 1, e)
             await page.wait_for_timeout(1500)
@@ -209,79 +229,99 @@ async def scrape_item(page, item_id: str, city: str, target_variant_name: str | 
     sold_out = any(s in body_lower for s in ("sold out", "out of stock", "notify me"))
 
     if offer is None and mrp is None and add_ct == 0 and not sold_out:
-        return result(
-            title=f"Unserviceable at {city}",
-            status="unserviceable",
-            is_sold_out=True,
-        )
+        return result(title=title, error_message="product_data_incomplete")
 
     if sold_out and add_ct == 0:
         return result(title=title, price=offer, mrp=mrp if mrp is not None else offer, status="out_of_stock", is_sold_out=True)
 
     price = offer if offer is not None else mrp
     if price is None:
-        # No price or mrp found — treat as out-of-stock rather than error
-        return result(title=title, status="out_of_stock", is_sold_out=True, error_message="price_not_found")
+        return result(title=title, error_message="price_not_found")
 
     logger.info("[Instamart] %s: OK %s price=%s mrp=%s", city, item_id, price, mrp)
     return result(title=title, price=price, mrp=mrp if mrp is not None else price, status="available", is_sold_out=False)
 
 
 async def scrape_one(browser, loc: dict, item_id: str, target_variant_name: str | None = None) -> dict:
-    """One item in one city with a throwaway context. For interactive/single lookups."""
-    snowpad = get_snowpad_provider()
-    await snowpad.acquire_slot()
-    try:
-        session_id = uuid.uuid4().hex[:8]
-        ctx, page = await open_city_page(browser, loc, session_id=session_id)
-        try:
-            return await scrape_item(page, item_id, loc["name"], target_variant_name)
-        finally:
-            await close_ctx(ctx)
-            await snowpad.close_bridge(session_id)
-    finally:
-        snowpad.release_slot()
+    """Use the same bounded recovery for single and bulk lookups."""
+    results = await sweep_city(browser, loc, [item_id])
+    return results[item_id.strip()]
 
 
 async def sweep_city(browser, loc: dict, item_ids, on_result=None, recycle_after_failures: int = 3) -> dict:
-    """
-    Scrape every item_id for one city on a single reused context.
-
-    Recycles the context (close + reopen, re-set location, fresh Snowpad session) after
-    `recycle_after_failures` consecutive errors — Swiggy's soft-block tends to stick to a
-    flagged context, so a fresh one recovers throughput. `on_result(pid, result)` is called
-    per item if given (for live progress). Returns {pid: result}.
-    """
+    """Sweep with bounded per-item attempts; setup failures never skip later PIDs."""
+    pids = list(dict.fromkeys(pid.strip() for pid in item_ids if pid.strip()))
     snowpad = get_snowpad_provider()
-    results: dict[str, dict] = {}
+    results = {}
+    ctx = page = None
+    session_id = None
+    item_timeout = float(os.getenv("INSTAMART_ITEM_TIMEOUT_SECONDS", "240"))
+
+    async def close_session():
+        nonlocal ctx, page, session_id
+        try:
+            await close_ctx(ctx)
+        finally:
+            ctx = page = None
+            if session_id is not None:
+                await snowpad.close_bridge(session_id)
+                session_id = None
+
+    async def reset_context():
+        nonlocal ctx, page, session_id
+        await close_session()
+        for attempt in range(3):
+            session_id = uuid.uuid4().hex[:8]
+            try:
+                ctx, page = await asyncio.wait_for(
+                    open_city_page(browser, loc, session_id=session_id), timeout=120,
+                )
+                return
+            except Exception:
+                await close_session()
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(0.5 * (attempt + 1))
+
     await snowpad.acquire_slot()
-    session_id = uuid.uuid4().hex[:8]
-    ctx, page = await open_city_page(browser, loc, session_id=session_id)
-    consecutive_fail = 0
     try:
-        for pid in item_ids:
-            pid = pid.strip()
-            r = await scrape_item(page, pid, loc["name"])
-            if r.get("status") == "error":
-                consecutive_fail += 1
-                if consecutive_fail >= recycle_after_failures:
-                    logger.warning("[Instamart] %s: %d consecutive fails — recycling context (fresh IP)",
-                                   loc["name"], consecutive_fail)
-                    await close_ctx(ctx)
-                    await snowpad.close_bridge(session_id)
-                    snowpad.release_slot()
-                    await snowpad.acquire_slot()
-                    session_id = uuid.uuid4().hex[:8]
-                    ctx, page = await open_city_page(browser, loc, session_id=session_id)  # fresh sticky IP
+        pending = pids
+        for pass_index in range(2):
+            retry_ids = []
+            consecutive_fail = 0
+            for n, pid in enumerate(pending):
+                try:
+                    if page is None or n % _SESSION_BATCH_SIZE == 0 or consecutive_fail >= recycle_after_failures:
+                        await reset_context()
+                        consecutive_fail = 0
+                    result = await asyncio.wait_for(
+                        scrape_item(page, pid, loc["name"]), timeout=item_timeout,
+                    )
+                except Exception as exc:
+                    result = {
+                        "product_id": pid, "city": loc["name"], "title": None,
+                        "price": None, "mrp": None, "status": "error",
+                        "is_sold_out": False, "url": _ITEM_URL.format(item_id=pid),
+                        "checked_at": datetime.now(IST).isoformat(),
+                        "error_message": str(exc) or type(exc).__name__,
+                    }
+                    await close_session()
+                results[pid] = result
+                if result.get("status") == "error":
+                    consecutive_fail += 1
+                    if pass_index == 0:
+                        retry_ids.append(pid)
+                        continue
+                else:
                     consecutive_fail = 0
-                    r = await scrape_item(page, pid, loc["name"])  # one retry on fresh ctx
-            else:
-                consecutive_fail = 0
-            results[pid] = r
-            if on_result is not None:
-                on_result(pid, r)
+                if on_result is not None:
+                    on_result(pid, result)
+            if not retry_ids:
+                break
+            pending = retry_ids
     finally:
-        await close_ctx(ctx)
-        await snowpad.close_bridge(session_id)
-        snowpad.release_slot()
+        try:
+            await close_session()
+        finally:
+            snowpad.release_slot()
     return results

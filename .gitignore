@@ -24,6 +24,7 @@ ENV/
 Thumbs.db
 
 # Project specific
+sheets_outbox/
 # Ignoring proxies.txt because it contains proxy credentials
 proxies.txt
 zepto_proxies.txt
