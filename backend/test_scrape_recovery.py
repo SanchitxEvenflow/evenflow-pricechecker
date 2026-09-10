@@ -139,11 +139,50 @@ async def check_amazon_cancel_and_resume():
             assert resume.await_args.kwargs["resume_tab"] == "Test"
 
 
+async def check_manual_amazon_skips_metadata_request():
+    sheets = Mock()
+    sheets.get_asins_with_rows.return_value = [{"asin": "B012345678"}]
+    sheets.async_batch_update_rows = AsyncMock()
+    state = SimpleNamespace(
+        sheets_client=sheets, cron_status={}, browser_manager=object(),
+        batch_throttle=asyncio.Semaphore(1), total_sem=asyncio.Semaphore(1),
+    )
+
+    async def scrape(asin, *_args, **_kwargs):
+        return {"asin": asin, "status": "available", "price": "99", "_cookies": {"sid": "x"}}
+
+    supplement = AsyncMock()
+    with patch.dict(os.environ, {"CRON_SHEET_ID": "sheet"}), \
+         patch.object(scheduler, "run_logger", Mock()), \
+         patch.object(scheduler, "get_browser", AsyncMock(return_value=object())), \
+         patch.object(scheduler, "scrape_amazon_with_retry", scrape), \
+         patch.object(scheduler, "fetch_curl_supplement", supplement):
+        await scheduler._run_full_scrape(
+            SimpleNamespace(state=state), "Manual", "manual", write_historical=False,
+        )
+    supplement.assert_not_awaited()
+    assert sheets.async_batch_update_rows.await_args.args[-1][0]["values"][0] == "99"
+
+
+def check_secondary_crons_are_opt_in():
+    fake = Mock()
+    with patch.dict(os.environ, {"CRON_ENABLED": "true"}, clear=False), \
+         patch.object(scheduler, "AsyncIOScheduler", return_value=fake):
+        os.environ.pop("AMAZON_CRON_HOUR_2", None)
+        os.environ.pop("FLIPKART_CRON_HOUR_2", None)
+        scheduler.setup_scheduler(object())
+    job_ids = {call.kwargs["id"] for call in fake.add_job.call_args_list}
+    assert "amazon_daily_scrape_2" not in job_ids
+    assert "flipkart_daily_scrape_2" not in job_ids
+
+
 async def main():
     await check_journal()
     for platform in ("blinkit", "zepto", "instamart"):
         await check_qc_checkpoints(platform)
     await check_amazon_cancel_and_resume()
+    await check_manual_amazon_skips_metadata_request()
+    check_secondary_crons_are_opt_in()
     for html, code, status in [
         ("<body>Loading</body>", 200, "blocked"),
         ("<body>Not found</body>", 404, "not_found"),

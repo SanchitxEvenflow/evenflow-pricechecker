@@ -148,7 +148,9 @@ async def _run_full_scrape(app, tab_prefix: str, run_type: str, write_historical
                 result["row"] = row_data["row"]
             # semaphore released — curl runs here, overlapping with the next ASIN's Playwright scrape
             cookies = result.pop("_cookies", {}) or {}
-            if cookies:
+            # Manual sync is price-first; the second request only supplements
+            # metadata and was adding up to 20 seconds before each worker moved on.
+            if cookies and write_historical:
                 curl_data = await fetch_curl_supplement(row_data["asin"], cookies)
                 merge_curl_supplement(result, curl_data)
             return result
@@ -1310,18 +1312,17 @@ def setup_scheduler(app) -> AsyncIOScheduler | None:
         coalesce=True,
     )
 
-    cron_hour_2 = int(os.getenv("AMAZON_CRON_HOUR_2", "4"))
-    cron_minute_2 = int(os.getenv("AMAZON_CRON_MINUTE_2", "0"))
-    scheduler.add_job(
-        run_scheduled_scrape,
-        "cron",
-        hour=cron_hour_2,
-        minute=cron_minute_2,
-        args=[app],
-        id="amazon_daily_scrape_2",
-        max_instances=1,
-        coalesce=True,
-    )
+    if os.getenv("AMAZON_CRON_HOUR_2") is not None:
+        scheduler.add_job(
+            run_scheduled_scrape,
+            "cron",
+            hour=int(os.environ["AMAZON_CRON_HOUR_2"]),
+            minute=int(os.getenv("AMAZON_CRON_MINUTE_2", "0")),
+            args=[app],
+            id="amazon_daily_scrape_2",
+            max_instances=1,
+            coalesce=True,
+        )
 
     flipkart_cron_hour = int(os.getenv("FLIPKART_CRON_HOUR", "0"))
     flipkart_cron_minute = int(os.getenv("FLIPKART_CRON_MINUTE", "5"))
@@ -1336,18 +1337,17 @@ def setup_scheduler(app) -> AsyncIOScheduler | None:
         coalesce=True,
     )
 
-    flipkart_cron_hour_2 = int(os.getenv("FLIPKART_CRON_HOUR_2", "8"))
-    flipkart_cron_minute_2 = int(os.getenv("FLIPKART_CRON_MINUTE_2", "0"))
-    scheduler.add_job(
-        run_scheduled_flipkart_scrape,
-        "cron",
-        hour=flipkart_cron_hour_2,
-        minute=flipkart_cron_minute_2,
-        args=[app],
-        id="flipkart_daily_scrape_2",
-        max_instances=1,
-        coalesce=True,
-    )
+    if os.getenv("FLIPKART_CRON_HOUR_2") is not None:
+        scheduler.add_job(
+            run_scheduled_flipkart_scrape,
+            "cron",
+            hour=int(os.environ["FLIPKART_CRON_HOUR_2"]),
+            minute=int(os.getenv("FLIPKART_CRON_MINUTE_2", "0")),
+            args=[app],
+            id="flipkart_daily_scrape_2",
+            max_instances=1,
+            coalesce=True,
+        )
     
     instamart_cron_hour = int(os.getenv("INSTAMART_CRON_HOUR", "12"))
     instamart_cron_minute = int(os.getenv("INSTAMART_CRON_MINUTE", "0"))

@@ -185,7 +185,7 @@ async def cron_status(request: Request):
     status = dict(getattr(request.app.state, "cron_status", {}))
     scheduler = getattr(request.app.state, "cron_scheduler", None)
     if scheduler:
-        job = scheduler.get_job("scheduled_scrape")
+        job = scheduler.get_job("amazon_daily_scrape")
         status["next_run_at"] = job.next_run_time.isoformat() if (job and job.next_run_time) else None
         status["scheduler_enabled"] = True
     else:
