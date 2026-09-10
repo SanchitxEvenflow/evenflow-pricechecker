@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import scheduler
 from amazon.scraper import _detect_status
 from bs4 import BeautifulSoup
+from flipkart.scraper import _extract_from_rome
 from utils.google_sheets import GoogleSheetsClient
 from test_qc_retries import _Snowpad
 
@@ -150,6 +151,10 @@ async def main():
     ]:
         soup = BeautifulSoup(html, "html.parser")
         assert _detect_status(soup, soup.get_text(), "B012345678", http_status=code) == status
+    incomplete_rome = {"RESPONSE": {"slots": [{
+        "widget": {"type": "PRODUCT_PRICE_SUMMARY", "data": {"pricing": {"value": {}}}},
+    }]}}
+    assert _extract_from_rome(incomplete_rome) is None
     print("scrape recovery checks passed")
 
 

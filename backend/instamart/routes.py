@@ -66,6 +66,8 @@ async def check_instamart_all_cities(body: InstamartAllCitiesRequest, request: R
             yield f"data: {json.dumps({'done': True, 'total': 0})}\n\n"
         return StreamingResponse(empty_stream(), media_type="text/event-stream")
 
+    city_sem = asyncio.Semaphore(max(1, int(os.getenv("INSTAMART_CITY_CONCURRENCY", "3"))))
+
     async def city_worker(loc: dict, queue: asyncio.Queue) -> None:
         city = loc["name"]
         cache = getattr(app_state, "cache", None)
@@ -89,9 +91,10 @@ async def check_instamart_all_cities(body: InstamartAllCitiesRequest, request: R
             queue.put_nowait(result)
 
         try:
-            browser = await app_state.browser_manager.acquire()
-            async with batch_context(app_state):
-                await sweep_city(browser, loc, pending, on_result=on_result)
+            async with city_sem:
+                browser = await app_state.browser_manager.acquire()
+                async with batch_context(app_state):
+                    await sweep_city(browser, loc, pending, on_result=on_result)
         except Exception as exc:
             logger.exception("[Instamart] %s: city sweep failed", city)
             for pid in pending:

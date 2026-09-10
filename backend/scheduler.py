@@ -553,7 +553,7 @@ async def _run_full_zepto_scrape(app, tab_prefix: str, run_type: str, write_hist
         n_cities = max(1, len(ZEPTO_LOCATIONS))
         matrix: dict[str, dict[str, dict]] = {pid: {} for pid in pids}
 
-        city_conc = max(1, min(n_cities, int(os.getenv("ZEPTO_CITY_CONCURRENCY", "6"))))
+        city_conc = max(1, min(n_cities, int(os.getenv("ZEPTO_CITY_CONCURRENCY", "3"))))
         city_sem = asyncio.Semaphore(city_conc)
         progress = {"cells": 0}
 
@@ -766,7 +766,7 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str, write_
 
         # Bound concurrent city contexts to keep RAM sane on small VPS (each context
         # is a heavy Chromium SPA render). Default 3; tune via env.
-        city_conc = max(1, min(n_cities, int(os.getenv("INSTAMART_CITY_CONCURRENCY", "6"))))
+        city_conc = max(1, min(n_cities, int(os.getenv("INSTAMART_CITY_CONCURRENCY", "3"))))
         city_sem = asyncio.Semaphore(city_conc)
         progress = {"cells": 0}
 

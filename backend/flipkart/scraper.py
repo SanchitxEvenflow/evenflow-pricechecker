@@ -197,8 +197,8 @@ def _extract_from_rome(data: dict) -> dict | None:
             if name:
                 fulfilled_by = name
 
-    if not has_price_widget:
-        return None  # signal caller to fall back to Playwright
+    if not has_price_widget or price is None:
+        return None  # unavailable and incomplete responses need browser confirmation
 
     # Format price as ₹ string to match existing Playwright output contract
     def _fmt(val: float | None) -> str:
@@ -535,10 +535,21 @@ async def scrape_flipkart(fsn: str, browser: Browser) -> dict:
 
             # ── Determine status ────────────────────────────────────────
             if not price:
+                unavailable = any(marker in body_lower for marker in (
+                    "currently unavailable", "sold out", "out of stock",
+                ))
+                if unavailable:
+                    if source == "snowpad":
+                        snowpad.report_success()
+                    _cache_url(fsn, resolved_url)
+                    return _error_result(fsn, resolved_url, "unavailable")
                 if source == "snowpad":
-                    snowpad.report_success()
-                _cache_url(fsn, resolved_url)
-                return _error_result(fsn, resolved_url, "unavailable")
+                    snowpad.report_failure()
+                if attempt < last_attempt_idx:
+                    await _safe_close_context(context)
+                    context = None
+                    continue
+                return _error_result(fsn, resolved_url, "error")
 
             # ── Cache & return ──────────────────────────────────────────
             if source == "snowpad":
@@ -682,5 +693,4 @@ async def _safe_close_context(context) -> None:
             await context.close()
         except Exception:
             pass
-
 

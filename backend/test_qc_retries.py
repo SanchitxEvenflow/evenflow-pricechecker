@@ -17,6 +17,8 @@ class _Page:
 
 
 class _Snowpad:
+    enabled = True
+
     def __init__(self):
         self.acquired = 0
         self.released = 0
@@ -28,6 +30,12 @@ class _Snowpad:
         self.released += 1
 
     async def close_bridge(self, _session_id):
+        pass
+
+    def report_success(self):
+        pass
+
+    def report_failure(self):
         pass
 
 
@@ -43,7 +51,7 @@ async def _check(module):
         module._SESSION_BATCH_SIZE,
     )
 
-    async def open_city_page(_browser, _loc, session_id=None):
+    async def open_city_page(_browser, _loc, session_id=None, **_kwargs):
         return object(), _Page()
 
     async def close_ctx(_ctx):
@@ -142,6 +150,7 @@ async def demo():
     await _check(instamart)
     _check_blinkit()
     for module in (zepto, instamart):
+        await _check_direct_setup_fallback(module)
         await _check_bulk_recovery(module)
         await _check_item_timeout(module)
     await _check_missing_data()
@@ -196,6 +205,29 @@ async def _check_bulk_recovery(module):
     assert len(calls) == len(results) == len(set(emitted)) == len(emitted) == 100
     assert all(r["status"] == "available" for r in results.values())
     assert snowpad.acquired == snowpad.released == 1
+
+
+async def _check_direct_setup_fallback(module):
+    snowpad = _Snowpad()
+    modes = []
+
+    async def open_page(*_args, use_snowpad=True, **_kwargs):
+        modes.append(use_snowpad)
+        if use_snowpad:
+            raise RuntimeError("proxy unavailable")
+        return object(), _Page()
+
+    async def scrape(_page, pid, city):
+        return {"product_id": pid, "city": city, "status": "available"}
+
+    with patch.object(module, "get_snowpad_provider", return_value=snowpad), \
+         patch.object(module, "open_city_page", open_page), \
+         patch.object(module, "close_ctx", AsyncMock()), \
+         patch.object(module, "scrape_item", scrape), \
+         patch.object(asyncio, "sleep", AsyncMock()):
+        results = await module.sweep_city(object(), {"name": "X"}, ["pid"])
+    assert modes == [True, True, False], modes
+    assert results["pid"]["status"] == "available"
 
 
 async def _check_item_timeout(module):

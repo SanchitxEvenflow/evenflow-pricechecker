@@ -68,6 +68,8 @@ async def check_zepto_all_cities(body: ZeptoAllCitiesRequest, request: Request):
             yield f"data: {json.dumps({'done': True, 'total': 0})}\n\n"
         return StreamingResponse(empty_stream(), media_type="text/event-stream")
 
+    city_sem = asyncio.Semaphore(max(1, int(os.getenv("ZEPTO_CITY_CONCURRENCY", "3"))))
+
     async def city_worker(loc: dict, queue: asyncio.Queue) -> None:
         cache = getattr(request.app.state, "cache", None)
         pending = []
@@ -82,14 +84,6 @@ async def check_zepto_all_cities(body: ZeptoAllCitiesRequest, request: Request):
         if not pending:
             return
 
-        browser = await request.app.state.browser_manager.acquire() if getattr(request.app.state, "browser_manager", None) else None
-        if not browser:
-            for pid in pending:
-                await queue.put({"product_id": pid, "city": loc["name"], "status": "error",
-                        "error_message": "browser pool unavailable", "price": None, "mrp": None,
-                        "title": None, "is_sold_out": False, "url": None, "checked_at": None})
-            return
-
         def _on_result(pid: str, r: dict) -> None:
             emitted.add(pid)
             if cache is not None and r.get("status") not in ("error", "invalid_format"):
@@ -97,8 +91,12 @@ async def check_zepto_all_cities(body: ZeptoAllCitiesRequest, request: Request):
             queue.put_nowait(r)
 
         try:
-            async with batch_context(request.app.state):
-                await sweep_city(browser, loc, pending, on_result=_on_result)
+            async with city_sem:
+                browser = await request.app.state.browser_manager.acquire() if getattr(request.app.state, "browser_manager", None) else None
+                if not browser:
+                    raise RuntimeError("browser pool unavailable")
+                async with batch_context(request.app.state):
+                    await sweep_city(browser, loc, pending, on_result=_on_result)
         except Exception as e:
             logger.exception("[Zepto] %s: sweep failed", loc["name"])
             for pid in pending:

@@ -80,6 +80,8 @@ async def check_blinkit_all_cities(body: BlinkitAllCitiesRequest, request: Reque
             yield f"data: {json.dumps({'done': True, 'total': 0})}\n\n"
         return StreamingResponse(empty_stream(), media_type="text/event-stream")
 
+    city_sem = asyncio.Semaphore(max(1, int(os.getenv("BLINKIT_CONCURRENCY", "6"))))
+
     async def city_worker(loc: dict, queue: asyncio.Queue) -> None:
         city = loc["name"]
         cache = getattr(request.app.state, "cache", None)
@@ -109,24 +111,25 @@ async def check_blinkit_all_cities(body: BlinkitAllCitiesRequest, request: Reque
             loop.call_soon_threadsafe(enqueue)
 
         try:
-            async with batch_context(request.app.state):
-                snowpad = get_snowpad_provider()
-                await snowpad.acquire_slot()
-                try:
-                    await loop.run_in_executor(
-                        request.app.state.thread_pool,
-                        partial(
-                            fetch_blinkit_city,
-                            item_ids=pending,
-                            pincode=loc["pincode"],
-                            lat=loc["lat"],
-                            lon=loc["lng"],
-                            city=city,
-                            on_result=on_result,
-                        ),
-                    )
-                finally:
-                    snowpad.release_slot()
+            async with city_sem:
+                async with batch_context(request.app.state):
+                    snowpad = get_snowpad_provider()
+                    await snowpad.acquire_slot()
+                    try:
+                        await loop.run_in_executor(
+                            request.app.state.thread_pool,
+                            partial(
+                                fetch_blinkit_city,
+                                item_ids=pending,
+                                pincode=loc["pincode"],
+                                lat=loc["lat"],
+                                lon=loc["lng"],
+                                city=city,
+                                on_result=on_result,
+                            ),
+                        )
+                    finally:
+                        snowpad.release_slot()
         except Exception as exc:
             logger.exception("Blinkit city worker failed for %s", city)
             for pid in pending:

@@ -130,13 +130,15 @@ def _extract_from_html(html: str) -> dict | None:
     return _extract_zepto_product(fake_response)
 
 
-async def open_city_page(browser, loc: dict, session_id: str | None = None):
+async def open_city_page(
+    browser, loc: dict, session_id: str | None = None, use_snowpad: bool = True,
+):
     """
     Create a WAF-passing, location-set (context, page) for one city.
     Reuse the returned page across many scrape_item() calls, then close_ctx().
     """
     snowpad = get_snowpad_provider()
-    proxy = await snowpad.bridge_proxy(session_id=session_id) if snowpad.enabled else None
+    proxy = await snowpad.bridge_proxy(session_id=session_id) if use_snowpad and snowpad.enabled else None
     ctx_opts = dict(
         user_agent=_UA,
         locale="en-IN",
@@ -272,16 +274,24 @@ async def sweep_city(browser, loc: dict, item_ids, on_result=None, recycle_after
     async def reset_context():
         nonlocal ctx, page, session_id
         await close_session()
-        for attempt in range(3):
-            session_id = uuid.uuid4().hex[:8]
+        sources = [True, True, False] if getattr(snowpad, "enabled", False) else [False]
+        for attempt, use_snowpad in enumerate(sources):
+            session_id = uuid.uuid4().hex[:8] if use_snowpad else None
             try:
                 ctx, page = await asyncio.wait_for(
-                    open_city_page(browser, loc, session_id=session_id), timeout=120,
+                    open_city_page(
+                        browser, loc, session_id=session_id, use_snowpad=use_snowpad,
+                    ),
+                    timeout=120,
                 )
+                if use_snowpad:
+                    snowpad.report_success()
                 return
             except Exception:
+                if use_snowpad:
+                    snowpad.report_failure()
                 await close_session()
-                if attempt == 2:
+                if attempt == len(sources) - 1:
                     raise
                 await asyncio.sleep(0.5 * (attempt + 1))
 
