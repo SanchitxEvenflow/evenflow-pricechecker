@@ -186,6 +186,13 @@ class InstamartCityResult(BaseModel):
     url: str
     checked_at: str
     error_message: str | None = None
+    spin_id: str | None = None
+    sku_id: str | None = None
+    store_id: str | None = None
+    is_available: bool | None = None
+    in_stock: bool | None = None
+    http_status: int | None = None
+    api_status: int | None = None
 
 
 class InstamartResponse(InstamartCityResult):
@@ -219,4 +226,3 @@ class FlipkartMinutesCityResult(BaseModel):
 
 class FlipkartMinutesResponse(FlipkartMinutesCityResult):
     pass
-

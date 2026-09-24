@@ -1,12 +1,10 @@
 """
 instamart/browser_scraper.py
-Playwright DOM scraper for Swiggy Instamart.
+Playwright DOM fallback scraper for Swiggy Instamart.
 
-Why this exists (2026 change): Swiggy moved Instamart behind AWS WAF *and* dropped
-SSR product data. Price no longer lives in window.___INITIAL_STATE___ — even a real
-browser leaves productV2.itemData empty. Price now exists ONLY in the client-rendered
-DOM. So curl_cffi/SSR parsing (the old scraper.py) is dead: with a valid aws-waf-token
-you get HTTP 200 but an empty shell.
+The primary path is now instamart/api_scraper.py: Playwright obtains one cookie
+session and curl_cffi reuses it against the item JSON API. This module remains the
+fallback for locations whose exact Instamart store ID has not yet been configured.
 
 Approach:
   - Render the item page in a real browser (the WAF JS challenge solves itself).

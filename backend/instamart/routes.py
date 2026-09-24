@@ -32,17 +32,22 @@ async def check_instamart_price(body: InstamartRequest, request: Request):
         )
 
     cache = getattr(request.app.state, "cache", None)
-    cache_key = f"instamart_v2_{body.product_id}_{body.city}"
+    product_id = body.product_id.strip().upper()
+    cache_key = f"instamart_v3_{product_id}_{body.city}"
 
     if cache is not None and cache_key in cache:
         result = cache[cache_key]
     else:
-        browser = await request.app.state.browser_manager.acquire() if getattr(request.app.state, "browser_manager", None) else None
-        if not browser:
-            raise HTTPException(status_code=503, detail="Browser pool unavailable")
-        async with sem_with_timeout(request.app.state.total_sem):
-            result = await scrape_one(browser, city_data, body.product_id)
-        if cache is not None and result.get("status") not in ("error", "invalid_format"):
+        api = getattr(request.app.state, "instamart_api", None)
+        if api is not None and city_data.get("store_id"):
+            result = await api.scrape_one(product_id, city_data)
+        else:
+            browser = await request.app.state.browser_manager.acquire() if getattr(request.app.state, "browser_manager", None) else None
+            if not browser:
+                raise HTTPException(status_code=503, detail="Browser pool unavailable")
+            async with sem_with_timeout(request.app.state.total_sem):
+                result = await scrape_one(browser, city_data, product_id)
+        if cache is not None and result.get("status") not in ("error", "invalid_format", "unresolved_product"):
             cache[cache_key] = result
 
     return InstamartResponse(**result)
@@ -58,7 +63,7 @@ async def check_instamart_all_cities(body: InstamartAllCitiesRequest, request: R
     """
     app_state = request.app.state
 
-    pids = list(dict.fromkeys(pid.strip() for pid in body.product_ids if pid.strip()))
+    pids = list(dict.fromkeys(pid.strip().upper() for pid in body.product_ids if pid.strip()))
     total = len(pids) * len(LOCATIONS)
 
     if total == 0:
@@ -68,13 +73,13 @@ async def check_instamart_all_cities(body: InstamartAllCitiesRequest, request: R
 
     city_sem = asyncio.Semaphore(max(1, int(os.getenv("INSTAMART_CITY_CONCURRENCY", "3"))))
 
-    async def city_worker(loc: dict, queue: asyncio.Queue) -> None:
+    async def browser_city_worker(loc: dict, queue: asyncio.Queue) -> None:
         city = loc["name"]
         cache = getattr(app_state, "cache", None)
         pending = []
         emitted: set[str] = set()
         for pid in pids:
-            cache_key = f"instamart_v2_{pid}_{city}"
+            cache_key = f"instamart_v3_{pid}_{city}"
             if cache is not None and cache_key in cache:
                 emitted.add(pid)
                 await queue.put(cache[cache_key].copy())
@@ -86,8 +91,8 @@ async def check_instamart_all_cities(body: InstamartAllCitiesRequest, request: R
 
         def on_result(pid: str, result: dict) -> None:
             emitted.add(pid)
-            if cache is not None and result.get("status") not in ("error", "invalid_format"):
-                cache[f"instamart_v2_{pid}_{city}"] = result.copy()
+            if cache is not None and result.get("status") not in ("error", "invalid_format", "unresolved_product"):
+                cache[f"instamart_v3_{pid}_{city}"] = result.copy()
             queue.put_nowait(result)
 
         try:
@@ -102,10 +107,46 @@ async def check_instamart_all_cities(body: InstamartAllCitiesRequest, request: R
                     await queue.put({"product_id": pid, "city": city, "status": "error",
                                      "error_message": str(exc)})
 
+    async def api_worker(locations: list[dict], queue: asyncio.Queue) -> None:
+        cache = getattr(app_state, "cache", None)
+        pairs = []
+        emitted: set[tuple[str, str]] = set()
+        for pid in pids:
+            for loc in locations:
+                key = (pid, loc["name"])
+                cache_key = f"instamart_v3_{pid}_{loc['name']}"
+                if cache is not None and cache_key in cache:
+                    emitted.add(key)
+                    await queue.put(cache[cache_key].copy())
+                else:
+                    pairs.append((pid, loc))
+
+        def on_result(result: dict) -> None:
+            key = (result["product_id"], result["city"])
+            emitted.add(key)
+            if cache is not None and result.get("status") not in ("error", "invalid_format", "unresolved_product"):
+                cache[f"instamart_v3_{key[0]}_{key[1]}"] = result.copy()
+            queue.put_nowait(result)
+
+        try:
+            if pairs:
+                await app_state.instamart_api.scrape_pairs(pairs, on_result=on_result)
+        except Exception as exc:
+            logger.exception("[Instamart API] bulk scrape failed")
+            for pid, loc in pairs:
+                if (pid, loc["name"]) not in emitted:
+                    await queue.put({"product_id": pid, "city": loc["name"], "status": "error",
+                                     "error_message": str(exc)})
+
     async def event_stream():
         done = 0
         queue: asyncio.Queue = asyncio.Queue()
-        tasks = [asyncio.create_task(city_worker(loc, queue)) for loc in LOCATIONS]
+        api = getattr(app_state, "instamart_api", None)
+        api_locations = [loc for loc in LOCATIONS if api is not None and loc.get("store_id")]
+        browser_locations = [loc for loc in LOCATIONS if loc not in api_locations]
+        tasks = [asyncio.create_task(browser_city_worker(loc, queue)) for loc in browser_locations]
+        if api_locations:
+            tasks.append(asyncio.create_task(api_worker(api_locations, queue)))
         expected = {(pid, loc["name"]) for pid in pids for loc in LOCATIONS}
         async for result in unique_queue_results(queue, tasks, expected):
             if result is None:

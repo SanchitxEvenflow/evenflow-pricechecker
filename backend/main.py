@@ -137,6 +137,9 @@ async def lifespan(app: FastAPI):
         from cachetools import TTLCache
         app.state.cache = TTLCache(maxsize=10000, ttl=7200)
 
+        from instamart.api_scraper import InstamartApiScraper
+        app.state.instamart_api = InstamartApiScraper(app.state.browser_manager)
+
     except Exception as e:
         logger.error("Failed to launch Playwright browser pool: %s", str(e))
         app.state.playwright_instance = None
@@ -266,6 +269,9 @@ async def lifespan(app: FastAPI):
     if getattr(app.state, "thread_pool", None):
         app.state.thread_pool.shutdown(wait=False)
         logger.info("Thread pool stopped")
+    if getattr(app.state, "instamart_api", None):
+        await app.state.instamart_api.close()
+        logger.info("Instamart API session closed")
     if getattr(app.state, "browser_manager", None):
         await app.state.browser_manager.close_all()
         logger.info("Playwright browser pool closed")

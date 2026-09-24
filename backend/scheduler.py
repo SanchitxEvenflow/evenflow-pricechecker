@@ -719,7 +719,7 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str, write_
 
         now = datetime.now(IST)
         new_tab = f"{tab_prefix}_{now.strftime('%Y-%m-%d_%H-%M')}"
-        pids = [r["asin"] for r in source_rows]
+        pids = [str(r["asin"]).strip().upper() for r in source_rows]
 
         run_id = run_logger.create_log(run_type, len(pids))
 
@@ -743,10 +743,8 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str, write_
             "error": None,
         })
 
-        # Swiggy Instamart is now a WAF-gated, client-rendered SPA (no SSR price).
-        # We scrape it with a real browser, city-major: one reused context per city
-        # (location set via GPS spoof), sweeping all PIDs, then closed. See
-        # instamart/browser_scraper.py for why curl/SSR parsing no longer works.
+        # Locations with a configured store_id use the pooled Instamart JSON API.
+        # Browser scraping remains as a temporary fallback until every store ID is known.
         from instamart.browser_scraper import sweep_city
 
         browser_manager = getattr(app.state, "browser_manager", None)
@@ -765,6 +763,13 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str, write_
         n_cities = max(1, len(INSTAMART_LOCATIONS))
         # matrix[pid][city] accumulates results; rows are written pid-major at the end.
         matrix: dict[str, dict[str, dict]] = {pid: {} for pid in pids}
+
+        instamart_api = getattr(app.state, "instamart_api", None)
+        api_locations = [
+            loc for loc in INSTAMART_LOCATIONS
+            if instamart_api is not None and loc.get("store_id")
+        ]
+        browser_locations = [loc for loc in INSTAMART_LOCATIONS if loc not in api_locations]
 
         # Bound concurrent city contexts to keep RAM sane on small VPS (each context
         # is a heavy Chromium SPA render). Default 3; tune via env.
@@ -796,17 +801,41 @@ async def _run_full_instamart_scrape(app, tab_prefix: str, run_type: str, write_
                     pid, loc["name"], "city sweep returned no result"
                 )
 
-        logger.info("Instamart: sweeping %d cities × %d PIDs (%d contexts at a time)",
-                    n_cities, len(pids), city_conc)
+        async def _api_sweep(locations: list[dict], chunk_pids: list[str]) -> None:
+            emitted: set[tuple[str, str]] = set()
+
+            def on_result(result: dict) -> None:
+                pid, city = result["product_id"], result["city"]
+                emitted.add((pid, city))
+                matrix[pid][city] = result
+                _on_cell(pid, result)
+
+            pairs = [(pid, loc) for pid in chunk_pids for loc in locations]
+            try:
+                await instamart_api.scrape_pairs(pairs, on_result=on_result)
+            except Exception as exc:
+                logger.exception("Instamart: API sweep failed")
+                for pid, loc in pairs:
+                    if (pid, loc["name"]) not in emitted:
+                        matrix[pid][loc["name"]] = _qc_error(pid, loc["name"], str(exc))
+                        _on_cell(pid, matrix[pid][loc["name"]])
+
+        logger.info(
+            "Instamart: sweeping %d cities × %d PIDs (API=%d, browser fallback=%d)",
+            n_cities, len(pids), len(api_locations), len(browser_locations),
+        )
 
         # Build rows pid-major from the matrix and flush in batches.
         for start in range(0, len(pids), 25):
             chunk_pids = pids[start:start + 25]
-            await asyncio.gather(*[_sweep(loc, chunk_pids) for loc in INSTAMART_LOCATIONS])
+            jobs = [_sweep(loc, chunk_pids) for loc in browser_locations]
+            if api_locations:
+                jobs.append(_api_sweep(api_locations, chunk_pids))
+            await asyncio.gather(*jobs)
             for i, pid in enumerate(chunk_pids, start):
                 city_results = matrix.get(pid, {})
                 for r in city_results.values():
-                    if r.get("status", "error") == "error":
+                    if r.get("status", "error") in ("error", "invalid_format", "unresolved_product"):
                         total_failed += 1
                     else:
                         total_success += 1
