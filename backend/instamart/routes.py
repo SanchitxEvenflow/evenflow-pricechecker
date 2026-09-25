@@ -128,15 +128,35 @@ async def check_instamart_all_cities(body: InstamartAllCitiesRequest, request: R
                 cache[f"instamart_v3_{key[0]}_{key[1]}"] = result.copy()
             queue.put_nowait(result)
 
-        try:
-            if pairs:
-                await app_state.instamart_api.scrape_pairs(pairs, on_result=on_result)
-        except Exception as exc:
-            logger.exception("[Instamart API] bulk scrape failed")
-            for pid, loc in pairs:
-                if (pid, loc["name"]) not in emitted:
-                    await queue.put({"product_id": pid, "city": loc["name"], "status": "error",
-                                     "error_message": str(exc)})
+        if not pairs:
+            return
+
+        # Live testing found the app-level throttle is tied to the session cookie's
+        # own quota (~135 requests), not elapsed time or source IP: reusing one
+        # cookie across batches collapsed to 100% failure even with a 20s gap and
+        # even with a rotated proxy IP, but re-minting the cookie before each batch
+        # kept 3x135 back-to-back at ~0.25% failure with zero cooldown needed.
+        batch_size = max(1, int(os.getenv("INSTAMART_PRODUCT_BATCH_SIZE", "15")))
+
+        by_pid: dict[str, list[dict]] = {}
+        for pid, loc in pairs:
+            by_pid.setdefault(pid, []).append(loc)
+        pid_batches = [pids_chunk for pids_chunk in
+                       (list(by_pid.keys())[i:i + batch_size]
+                        for i in range(0, len(by_pid), batch_size))]
+
+        for batch_num, pid_batch in enumerate(pid_batches):
+            batch_pairs = [(pid, loc) for pid in pid_batch for loc in by_pid[pid]]
+            if batch_num > 0:
+                await app_state.instamart_api._refresh_cookies()
+            try:
+                await app_state.instamart_api.scrape_pairs(batch_pairs, on_result=on_result)
+            except Exception as exc:
+                logger.exception("[Instamart API] batch %d/%d failed", batch_num + 1, len(pid_batches))
+                for pid, loc in batch_pairs:
+                    if (pid, loc["name"]) not in emitted:
+                        await queue.put({"product_id": pid, "city": loc["name"], "status": "error",
+                                         "error_message": str(exc)})
 
     async def event_stream():
         done = 0
